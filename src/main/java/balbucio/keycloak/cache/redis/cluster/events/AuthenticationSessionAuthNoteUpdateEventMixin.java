@@ -10,8 +10,7 @@ public abstract class AuthenticationSessionAuthNoteUpdateEventMixin {
 
   @JsonCreator
   public AuthenticationSessionAuthNoteUpdateEventMixin(
+      @JsonProperty("authNotesFragment") Map<String, String> authNotesFragment,
       @JsonProperty("authSessionId") @JsonSetter(nulls = Nulls.AS_EMPTY) String authSessionId,
-      @JsonProperty("tabId") @JsonSetter(nulls = Nulls.AS_EMPTY) String tabId,
-      @JsonProperty("authNotesFragment") @JsonSetter(nulls = Nulls.AS_EMPTY)
-          Map<String, String> authNotesFragment) {}
+      @JsonProperty("tabId") @JsonSetter(nulls = Nulls.AS_EMPTY) String tabId) {}
 }

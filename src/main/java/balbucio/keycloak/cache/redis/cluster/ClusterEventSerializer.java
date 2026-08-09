@@ -25,7 +25,9 @@ import balbucio.keycloak.cache.redis.cluster.events.UserFederationLinkRemovedEve
 import balbucio.keycloak.cache.redis.cluster.events.UserFederationLinkUpdatedEventMixin;
 import balbucio.keycloak.cache.redis.cluster.events.UserFullInvalidationEventMixin;
 import balbucio.keycloak.cache.redis.cluster.events.UserUpdatedEventMixin;
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.annotation.PropertyAccessor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jboss.logging.Logger;
@@ -62,6 +64,11 @@ public final class ClusterEventSerializer {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     static {
+        // Keycloak cache invalidation events keep their payload in package-private final fields
+        // (only "id" is exposed via a getter). Without field visibility the JSON would drop
+        // realmId/clientId/roleName/etc., silently breaking cross-node invalidation.
+        MAPPER.setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY);
+
         MAPPER.activateDefaultTyping(
                 MAPPER.getPolymorphicTypeValidator(),
                 ObjectMapper.DefaultTyping.NON_FINAL,
