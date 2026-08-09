@@ -2,12 +2,12 @@ package balbucio.keycloak.cache.redis.authSession;
 
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
 import balbucio.keycloak.cache.redis.MapEntity;
-import balbucio.keycloak.cache.redis.common.Constants;
 import balbucio.keycloak.cache.redis.common.TimeAdapter;
 import org.keycloak.common.util.Base64Url;
 import org.keycloak.common.util.SecretGenerator;
@@ -165,7 +165,14 @@ public class RedisRootAuthenticationSessionAdapter extends MapEntity implements 
     }
 
     Set<String> tabIds() {
-        return getSet(TAB_PREFIX);
+        Set<String> tabs = new LinkedHashSet<>();
+        String existsSuffix = TAB_EXISTS_SUFFIX;
+        for (String field : snapshot().keySet()) {
+            if (field.startsWith(TAB_PREFIX) && field.endsWith(existsSuffix)) {
+                tabs.add(field.substring(TAB_PREFIX.length(), field.length() - existsSuffix.length()));
+            }
+        }
+        return tabs;
     }
 
     String getTabField(String tabId, String field) {

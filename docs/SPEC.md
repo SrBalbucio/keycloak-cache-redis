@@ -60,6 +60,7 @@ Config do SPI `redisConnection` (provider `default` — prefixo env `KC_SPI_REDI
 | `username` / `password` | autenticação | — |
 | `timeout` | ex.: `2000`, `2s`, `500ms` | `2000ms` |
 | `database` | índice lógico do Redis | `0` |
+| `keyPrefix` | prefixo aplicado a todas as chaves Redis (`KC_SPI_REDIS_CONNECTION_DEFAULT_KEY_PREFIX` ou alias `KC_REDIS_KEY_PREFIX`) | _(vazio)_ |
 
 MVP suporta **standalone**; `sentinel`/`cluster` ficam previstos no design, mas marcados como fase futura.
 
@@ -178,12 +179,149 @@ Todos com `IsSupported`. (`NullInfinispanConnectionProviderFactory` ficou coment
 2. **Fase 1 — MVP:** SPI `redisConnection` (standalone/Lettuce) + `Key`/`MapEntity`/`RedisHashCas`/`RedisChangelogTransaction` + `RedisDatastoreProvider` + região **userSessions** + shims + docker-compose smoke.
 3. **Fase 2:** região **authenticationSessions**.
 4. **Fase 3:** regiões **loginFailures** + **singleUseObjects**.
-5. **Fase 4 (futuro/opcional):** `ClusterProvider` (PUBSUB, multi-node single-region), modos `sentinel`/`cluster`, métricas, testes completos.
+5. **Fase 4:** `ClusterProvider` via Redis PUBSUB — multi-node na mesma região (seção 13).
+6. **Fase 5:** robustez — modos `sentinel`/`cluster`, CAS por operação, métricas (seção 14).
+7. **Fase 6:** prontidão para produção — testes completos, load, operação/failover, documentação, CI/CD (seção 15).
 
-## 12. Fora de escopo (versão básica)
+Cada fase só inicia após a anterior validada (smoke/integração). Decisões transversais registradas na seção 16.
 
-- Multi-region active-active.
-- Migração de sessões existentes.
-- Persistência em banco de tokens revogados/offline.
-- Authorization (feature desligada ou cache nullado).
-- `ClusterProvider` (PUBSUB) — **documentar impacto**: single-node funciona sem; multi-node na mesma região pode precisar dele para invalidação/coordenação interna do Keycloak → decidir na Fase 4.
+## 12. Fora de escopo (versão básica + fases 4–6)
+
+- **Multi-region active-active** — não haverá forwarding de eventos/invalidação entre regiões geográficas.
+- **Migração de sessões existentes** (`importUserSessions` no-op) — após o switchover os usuários reautenticam; ver seção 14.4.
+- **Persistência em banco de tokens revogados / sessões offline** — permanece somente em Redis.
+- **Authorization Services** — adiado por decisão (seção 16.1); a extensão mantém o cache de authorization desativado.
+
+## 13. Fase 4 — `ClusterProvider` via Redis PUBSUB (multi-node, single-region)
+
+### 13.1 Objetivo
+
+Permitir deployments multi-node na mesma região. Sem o `ClusterProvider`, cada nó opera isolado e as invalidações de caches locais (realm/user/client) não propagam entre nós. As sessões em si já ficam no Redis (fonte da verdade); o ClusterProvider atende à coordenação e invalidação interna do Keycloak.
+
+### 13.2 Componentes (port da referência, Jedis → Lettuce)
+
+- `RedisPubsubClusterProviderFactory` — id `infinispan` (sobrescreve o built-in), `order = PROVIDER_PRIORITY + 1`, `IsSupported`:
+  - Duas conexões Lettuce dedicadas: `publisher` (`sync()`) e `subscriber` (`StatefulRedisPubSubConnection<String,String>`).
+  - Registra `RedisPubSubListener<String,String>` no canal de eventos (ex.: `kc:cluster:events`).
+  - `close()` fecha o `ClusterProvider` + subscriber + publisher.
+- `RedisPubsubClusterProvider implements ClusterProvider`:
+  - `notify(...)` → serializa a notificação e faz `publish` no canal.
+  - `registerListener(...)` → listener local + multicast dos eventos recebidos via pub/sub (invalidação local).
+  - `executeIfNotExecuted(eventKey, taskId, runnable)` → idempotência via `SET <key> NX EX <ttl>` (ex.: `kc:cluster:task:<eventKey>:<taskId>`).
+  - `getClusterStartupTime()` → chave compartilhada `kc:cluster:startTime` (primeiro nó define com `SET NX`; os demais leem o valor existente).
+- `ClusterEventSerializer` + mixins Jackson:
+  - Wrapper de notificação (id, eventType, payload, endereços, ignoreSender).
+  - Mixins para eventos de invalidação internos: `InvalidationEvent`, `UserFullInvalidationEvent`, `UserCacheRealmInvalidationEvent`, `RealmUpdatedEvent`, `ClientUpdatedEvent`, `RoleUpdatedEvent`, etc. (portar a lista da referência).
+- Nota: classes internas do Keycloak exigem mixins para serialização JSON.
+
+### 13.3 Lettuce — pontos de atenção
+
+- `StatefulRedisPubSubConnection` é dedicada (não multiplexada com o client de comandos).
+- Publisher: `connection.sync().publish(channel, json)`.
+- `RedisPubSubListener` implementando `message(channel, payload)` → desserializa → invalidação local.
+- Não usar a mesma conexão para comandos e subscribe (Lettuce bloqueia o subscribe na conexão de comandos).
+
+### 13.4 Escopo e validação
+
+- Single-region: apenas PUBSUB dentro da região; **sem** forwarding cross-region (SNS/GCP fora de escopo).
+- Deploy de validação: docker-compose com 2+ nós Keycloak + Redis. Validar:
+  - Logout/login em um nó reflete no outro (sessão revogada é fonte no Redis).
+  - Atualização de realm/cliente propaga invalidação de cache local entre nós.
+  - `executeIfNotExecuted` (tasks) sem duplicação.
+- Sticky session: **não necessária** — sessões compartilhadas no Redis; o shim `DisabledStickySessionEncoderProvider` (Fase 1) já desativa o route.
+
+## 14. Fase 5 — Robustez: sentinel/cluster, CAS por operação, métricas, migração
+
+### 14.1 Modos `sentinel` e `cluster`
+
+- **Sentinel:** `RedisURI.Builder.sentinels(nodes).sentinelMasterId(masterName)` (+ ssl, user/pass, timeout, database). Failover automático do Lettuce; fallback `eval` em NOSCRIPT já coberto (Fase 1).
+- **Cluster:** `RedisClusterClient`. Impacto no `RedisChangelogTransaction`:
+  - `MULTI/EXEC` não é válido entre slots → em modo cluster, executar `DEL`+`SREM` (delete) e `SADD` (índices) como comandos individuais, sem atomicidade (como na referência).
+  - Tradeoff documentado: consistência eventual dos índices secundários em cluster; aceitável porque entidades de sessão são curtas e as leituras filtram por realm.
+  - Evolução opcional: **hash tags** `{...}` para colocar entidade + índices no mesmo slot e preservar atomicidade via Lua.
+- Validação: docker-compose com topologia de 3 nós Redis (cluster) e 2+ sentinels.
+
+### 14.2 CAS por operação (corrige known issue da referência)
+
+- Problema: o rebase field-level perde **operações lógicas** sob concorrência (ex.: `incrementFailures()` do loginFailure → contador recalculado de base obsoleta).
+- Solução: estender `RedisHashCas`/`RedisChangelogTransaction` com **funções Lua por entidade** que executam a operação lógica atomicamente:
+  - Contadores (`HINCRBY`) — ex.: loginFailure `incrementFailures`/`decrementFailures`.
+  - Consumo/remoção atômica — singleUseObjects (`removeIfPresent`).
+  - Update de `lastSessionRefresh`/`started` sem reescrever o hash inteiro.
+- Referência de design: o `Updater` do Keycloak (sessões remote/infinispan) — replicar a semântica por operação, não por campo.
+- Retry: manter retry CAS (máx. 3) para writes field-level; operações lógicas ficam dentro do script.
+
+### 14.3 Métricas (Micrometer)
+
+- Registrar no registry global do Keycloak (endpoint `/metrics`).
+- **Lettuce nativo:** `MicrometerCommandLatencyRecorder` + `MicrometerOptions` (`io.lettuce.core.micrometer`) para latência por comando; habilitar na `DefaultRedisConnectionProviderFactory`.
+- **Contadores por cache/operação** (port `RedisMetrics`): `HGETALL`, `HSETEX`, `HSET`, `SADD`, `HDEL`, `SREM`, `DEL`, `WATCH`; tags: `cache`, `operation`.
+- Conexão: up/down, conexões ativas, failovers.
+
+### 14.4 Migração de sessões (`importUserSessions`)
+
+- Decisão: manter **no-op** no escopo básico. Sem migração Infinispan → Redis; após o switchover os usuários reautenticam.
+- Documentar no README operacional (seção 15.4).
+- Evolução futura (fora de escopo): job de import de sessões persistentes.
+
+## 15. Fase 6 — Prontidão para produção
+
+### 15.1 Testes completos
+
+- Portar o testsuite de modelo da referência (`KeycloakModelTest`, `keycloak-quarkus-server` em test scope, H2, `keycloak.model.parameters`, `testcontainers-redis`) cobrindo as 4 regiões:
+  - userSessions: create/get/remove, offline, remember-me, expiração, índices.
+  - authenticationSessions: fluxo de login completo.
+  - loginFailures: lockout, increment/decrement, reset.
+  - singleUseObjects: consume, `removeIfPresent`, expiração.
+- Cluster (Fase 4): teste de invalidação/integração entre 2 nós.
+- Unit: `RedisHashCas` (Lua) e `MapEntity` (dirty/deleted, maps/sets).
+- Investigar os testes "skipped/failing" da referência (semântica de transação única) e corrigir.
+
+### 15.2 Benchmark / carga
+
+- Load test (k6/JMeter): login/logout/refresh, throughput, latência P95, volume de sessões no Redis.
+- Comparar com baseline Infinispan.
+- Identificar gargalos: round-trips, pipelining, CAS retries.
+
+### 15.3 Operação / failover
+
+- Failover: matar Redis/sentinel master; validar reconexão e recuperação NOSCRIPT.
+- Backup/restore: RDB/AOF; snapshot.
+- Restart do Keycloak preservando sessões.
+- Monitoramento: alertas de conexão Redis + métricas de operação (seção 14.3).
+
+### 15.4 Documentação e deploy
+
+- README operacional: tabela de propriedades, modos de conexão, multi-node, limitações (authz off, sem migração, sticky session).
+- docker-compose de referência (2 nós + sentinel + cluster).
+- Troubleshooting: NOSCRIPT, CAS retries, perda de conexão.
+
+### 15.5 CI/CD
+
+- GitHub Actions: build, unit tests, integration tests (testcontainers), publicação do jar `-withdeps`.
+- Versionamento e releases.
+
+### 15.6 Acompanhamento de upgrades do Keycloak
+
+- Revalidar a cada release (26.x → 27.x): interfaces de sessão e `DatastoreProvider`.
+- Roteiro de migração de versão no README.
+
+## 16. Decisões registradas
+
+### 16.1 Authorization — adiado
+
+- O cache de authorization (cache-aside sobre JPA; default `InfinispanStoreFactory`) fica **desativado** via `NullCachedStoreProviderFactory` (id `default`), como na referência — o Keycloak usa `InfinispanStoreFactory` diretamente em vários pontos e a autorização "provavelmente não funciona" com a extensão ativa.
+- **Não** será implementado um cache de authorization em Redis nesta versão: é ortogonal ao valor central (sessões), é cache-aside (não é fonte da verdade) e o problema multi-node é o mesmo ClusterProvider da Fase 4.
+- Se houver demanda por Authorization Services: avaliar o caminho barato (rodar **sem cache**, direto no store JPA — requer validação do fallback no KC 26.7) antes de qualquer implementação em Redis.
+
+### 16.2 ClusterProvider
+
+- Necessário apenas em multi-node. Single-node funciona sem. A Fase 4 o introduz para single-region.
+
+### 16.3 Sticky session
+
+- Não necessária (sessões no Redis; shim desativa o route).
+
+### 16.4 Migração de sessões
+
+- No-op; documentada (seção 14.4).

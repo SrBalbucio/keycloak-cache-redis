@@ -80,6 +80,19 @@ class MapEntityTest {
     }
 
     @Test
+    void logicalIncrementSurvivesRebase() {
+        MapEntity entity = MapEntity.fromRedis(Map.of(Constants.VERSION_FIELD, "1", "numFailures", "2"));
+        entity.increment("numFailures", 3);
+        assertEquals("5", entity.get("numFailures"));
+        assertEquals(Map.of("numFailures", 3L), entity.pendingIncrements());
+
+        entity.rebase(Map.of(Constants.VERSION_FIELD, "2", "numFailures", "10"));
+        assertEquals("13", entity.get("numFailures"));
+        assertEquals(Map.of("numFailures", 3L), entity.pendingIncrements());
+        assertTrue(entity.pendingSets().isEmpty());
+    }
+
+    @Test
     void fromRedisLoadsVersion() {
         MapEntity entity =
                 MapEntity.fromRedis(Map.of(Constants.VERSION_FIELD, "9", "name", "alice"));

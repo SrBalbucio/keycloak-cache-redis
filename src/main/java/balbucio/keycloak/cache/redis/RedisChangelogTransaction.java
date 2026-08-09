@@ -13,9 +13,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
 import balbucio.keycloak.cache.redis.common.Constants;
+import balbucio.keycloak.cache.redis.connection.RedisAsync;
 import balbucio.keycloak.cache.redis.connection.RedisConnectionProvider;
-import io.lettuce.core.api.async.RedisAsyncCommands;
-import io.lettuce.core.api.sync.RedisCommands;
+import balbucio.keycloak.cache.redis.connection.RedisSync;
 import org.jboss.logging.Logger;
 import org.keycloak.common.util.Time;
 import org.keycloak.models.AbstractKeycloakTransaction;
@@ -65,12 +65,14 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
             return null;
         }
         Map<String, String> hash = connection.sync().hgetall(key.key());
+        RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.HGETALL);
         if (hash == null || hash.isEmpty()) {
             return null;
         }
         MapEntity entity = MapEntity.fromRedis(hash);
         if (entity.isExpired(Time.currentTimeMillis())) {
             connection.sync().del(key.key());
+            RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.DEL);
             return null;
         }
         A adapter = adapterSupplier.create(key, entity);
@@ -103,12 +105,12 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
             return result;
         }
 
-        RedisAsyncCommands<String, String> async = connection.async();
+        RedisAsync async = connection.async();
         async.setAutoFlushCommands(false);
         try {
             List<CompletableFuture<Map<String, String>>> futures = new ArrayList<>();
             for (K key : missing) {
-                futures.add(async.hgetall(key.key()).toCompletableFuture());
+                futures.add(async.hgetall(key.key()));
             }
             async.flushCommands();
             long now = Time.currentTimeMillis();
@@ -155,29 +157,22 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
 
     @Override
     protected void commitImpl() {
-        RedisCommands<String, String> sync = connection.sync();
+        RedisSync sync = connection.sync();
 
         // Deletes + index removals
         if (!toDelete.isEmpty()) {
-            sync.multi();
-            try {
-                for (Map.Entry<K, A> e : toDelete.entrySet()) {
-                    sync.del(e.getKey().key());
-                    for (IndexUpdate index : indexFunction.apply(e.getValue())) {
-                        if (index.member() != null) {
-                            sync.srem(index.indexKey(), index.member());
+            runIndexBatch(
+                    sync,
+                    () -> {
+                        for (Map.Entry<K, A> e : toDelete.entrySet()) {
+                            sync.del(e.getKey().key());
+                            for (IndexUpdate index : indexFunction.apply(e.getValue())) {
+                                if (index.member() != null) {
+                                    sync.srem(index.indexKey(), index.member());
+                                }
+                            }
                         }
-                    }
-                }
-                sync.exec();
-            } catch (RuntimeException ex) {
-                try {
-                    sync.discard();
-                } catch (RuntimeException ignored) {
-                    // ignore
-                }
-                throw ex;
-            }
+                    });
         }
 
         // Dirty entities via CAS
@@ -205,9 +200,12 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
             toSet.remove(Constants.VERSION_FIELD);
             Set<String> toDeleteFields = new HashSet<>(entity.pendingDeletes());
             toDeleteFields.remove(Constants.VERSION_FIELD);
+            Map<String, Long> increments = entity.pendingIncrements();
 
             long result =
-                    RedisHashCas.hsetex(connection, key.key(), expected, expireAt, toSet, toDeleteFields);
+                    RedisHashCas.hsetex(
+                            connection, key.key(), expected, expireAt, toSet, toDeleteFields, increments);
+            RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.HSETEX);
             if (result == 1) {
                 long newVersion = expected == null ? 1L : expected + 1L;
                 entity.clearChangeTracking(newVersion);
@@ -215,7 +213,6 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
                 return;
             }
             if (result == -1) {
-                // create conflict — reload and rebase
                 LOG.debugf("CAS create conflict for %s, rebasing", key.key());
             } else if (result == 0) {
                 LOG.debugf("CAS version mismatch for %s, rebasing (attempt %d)", key.key(), attempts);
@@ -226,12 +223,9 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
             Map<String, String> fresh = connection.sync().hgetall(key.key());
             if (fresh == null || fresh.isEmpty()) {
                 entity.rebase(null);
-                // keep created=true semantics after empty reload when originally creating
                 if (expected == null) {
-                    // someone else didn't create; retry create
                     continue;
                 }
-                // entity vanished — treat as create
                 entity.rebase(null);
             } else {
                 entity.rebase(fresh);
@@ -246,20 +240,34 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
         if (indexes.isEmpty()) {
             return;
         }
-        RedisCommands<String, String> sync = connection.sync();
+        RedisSync sync = connection.sync();
+        runIndexBatch(
+                sync,
+                () -> {
+                    for (IndexUpdate index : indexes) {
+                        if (index.member() == null) {
+                            continue;
+                        }
+                        if (add) {
+                            sync.sadd(index.indexKey(), index.member());
+                        } else {
+                            sync.srem(index.indexKey(), index.member());
+                        }
+                    }
+                });
+    }
+
+    private void runIndexBatch(RedisSync sync, Runnable commands) {
+        if (!sync.supportsTransactions()) {
+            commands.run();
+            RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.SADD);
+            return;
+        }
         sync.multi();
         try {
-            for (IndexUpdate index : indexes) {
-                if (index.member() == null) {
-                    continue;
-                }
-                if (add) {
-                    sync.sadd(index.indexKey(), index.member());
-                } else {
-                    sync.srem(index.indexKey(), index.member());
-                }
-            }
+            commands.run();
             sync.exec();
+            RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.SADD);
         } catch (RuntimeException ex) {
             try {
                 sync.discard();

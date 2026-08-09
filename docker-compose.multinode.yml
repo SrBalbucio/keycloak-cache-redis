@@ -1,0 +1,69 @@
+volumes:
+  h2_data_1:
+    driver: local
+  h2_data_2:
+    driver: local
+  valkey_data:
+    driver: local
+
+services:
+  valkey:
+    image: valkey/valkey:8.1.5
+    ports:
+      - "6379:6379"
+    command: >
+      valkey-server
+      --appendonly yes
+      --protected-mode no
+    volumes:
+      - valkey_data:/data
+
+  keycloak-1:
+    image: quay.io/keycloak/keycloak:26.7.1
+    volumes:
+      - h2_data_1:/opt/keycloak/data
+      - ./target/keycloak-cache-redis-1.0-SNAPSHOT-withdeps.jar:/opt/keycloak/providers/keycloak-cache-redis-1.0-SNAPSHOT-withdeps.jar
+    environment:
+      KC_CACHE: local
+      KC_COMMUNITY_REDIS_CACHE_ENABLED: "true"
+      KC_SPI_REDIS_CONNECTION_DEFAULT_MODE: standalone
+      KC_SPI_REDIS_CONNECTION_DEFAULT_NODES: valkey:6379
+      KC_SPI_REDIS_CONNECTION_DEFAULT_KEY_PREFIX: kc
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HTTP_PORT: "8080"
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: "8080"
+      KC_HOSTNAME_STRICT: "false"
+      KC_PROXY_HEADERS: xforwarded
+      KC_LOG_LEVEL: INFO,balbucio.keycloak.cache.redis:DEBUG
+    ports:
+      - "8080:8080"
+    entrypoint: ["/opt/keycloak/bin/kc.sh", "start-dev", "--verbose"]
+    depends_on:
+      - valkey
+
+  keycloak-2:
+    image: quay.io/keycloak/keycloak:26.7.1
+    volumes:
+      - h2_data_2:/opt/keycloak/data
+      - ./target/keycloak-cache-redis-1.0-SNAPSHOT-withdeps.jar:/opt/keycloak/providers/keycloak-cache-redis-1.0-SNAPSHOT-withdeps.jar
+    environment:
+      KC_CACHE: local
+      KC_COMMUNITY_REDIS_CACHE_ENABLED: "true"
+      KC_SPI_REDIS_CONNECTION_DEFAULT_MODE: standalone
+      KC_SPI_REDIS_CONNECTION_DEFAULT_NODES: valkey:6379
+      KC_SPI_REDIS_CONNECTION_DEFAULT_KEY_PREFIX: kc
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HTTP_PORT: "8081"
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: "8081"
+      KC_HOSTNAME_STRICT: "false"
+      KC_PROXY_HEADERS: xforwarded
+      KC_LOG_LEVEL: INFO,balbucio.keycloak.cache.redis:DEBUG
+    ports:
+      - "8081:8081"
+    entrypoint: ["/opt/keycloak/bin/kc.sh", "start-dev", "--http-port=8081", "--verbose"]
+    depends_on:
+      - valkey

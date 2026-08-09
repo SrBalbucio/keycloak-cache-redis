@@ -21,6 +21,8 @@ public class MapEntity implements ExpirableEntity {
     private final Map<String, String> data = new HashMap<>();
     private final Set<String> dirty = new LinkedHashSet<>();
     private final Set<String> deleted = new LinkedHashSet<>();
+    /** Logical HINCRBY deltas applied atomically at CAS commit (survives field-level rebase). */
+    private final Map<String, Long> increments = new LinkedHashMap<>();
     private boolean markedForDelete;
     private boolean created;
     private Long loadedVersion;
@@ -56,6 +58,7 @@ public class MapEntity implements ExpirableEntity {
         markedForDelete = true;
         dirty.clear();
         deleted.clear();
+        increments.clear();
     }
 
     public Long getLoadedVersion() {
@@ -67,7 +70,11 @@ public class MapEntity implements ExpirableEntity {
     }
 
     public boolean hasPendingChanges() {
-        return markedForDelete || created || !dirty.isEmpty() || !deleted.isEmpty();
+        return markedForDelete
+                || created
+                || !dirty.isEmpty()
+                || !deleted.isEmpty()
+                || !increments.isEmpty();
     }
 
     public String get(String field) {
@@ -76,7 +83,19 @@ public class MapEntity implements ExpirableEntity {
         }
         String value = data.get(field);
         if (Constants.NULL_SENTINEL.equals(value)) {
-            return null;
+            value = null;
+        }
+        Long delta = increments.get(field);
+        if (delta != null && delta != 0L) {
+            long base = 0L;
+            if (value != null) {
+                try {
+                    base = Long.parseLong(value);
+                } catch (NumberFormatException e) {
+                    base = 0L;
+                }
+            }
+            return Long.toString(base + delta);
         }
         return value;
     }
@@ -86,6 +105,7 @@ public class MapEntity implements ExpirableEntity {
             return;
         }
         deleted.remove(field);
+        increments.remove(field);
         if (value == null) {
             data.put(field, Constants.NULL_SENTINEL);
         } else {
@@ -94,12 +114,42 @@ public class MapEntity implements ExpirableEntity {
         dirty.add(field);
     }
 
+    /**
+     * Queue a logical {@code HINCRBY} for {@code field}. Survives CAS rebase (unlike read-modify-write
+     * via {@link #set}).
+     */
+    public void increment(String field, long delta) {
+        if (markedForDelete || delta == 0L) {
+            return;
+        }
+        deleted.remove(field);
+        // if field was dirty via set, fold into absolute set instead
+        if (dirty.contains(field)) {
+            String current = data.get(field);
+            long base = 0L;
+            if (current != null && !Constants.NULL_SENTINEL.equals(current)) {
+                try {
+                    base = Long.parseLong(current);
+                } catch (NumberFormatException ignored) {
+                    base = 0L;
+                }
+            }
+            set(field, Long.toString(base + delta));
+            return;
+        }
+        increments.merge(field, delta, Long::sum);
+        if (increments.get(field) == 0L) {
+            increments.remove(field);
+        }
+    }
+
     public void remove(String field) {
         if (markedForDelete) {
             return;
         }
         data.remove(field);
         dirty.remove(field);
+        increments.remove(field);
         deleted.add(field);
     }
 
@@ -151,6 +201,10 @@ public class MapEntity implements ExpirableEntity {
         return Collections.unmodifiableSet(new HashSet<>(deleted));
     }
 
+    public Map<String, Long> pendingIncrements() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(increments));
+    }
+
     public Map<String, String> snapshot() {
         Map<String, String> copy = new HashMap<>();
         for (Map.Entry<String, String> e : data.entrySet()) {
@@ -167,12 +221,14 @@ public class MapEntity implements ExpirableEntity {
     public void rebase(Map<String, String> fresh) {
         Map<String, String> pending = pendingSets();
         Set<String> pendingDel = new HashSet<>(deleted);
+        Map<String, Long> pendingIncr = new LinkedHashMap<>(increments);
         boolean wasCreated = created;
         boolean wasDelete = markedForDelete;
 
         data.clear();
         dirty.clear();
         deleted.clear();
+        increments.clear();
         created = false;
         markedForDelete = false;
 
@@ -196,13 +252,36 @@ public class MapEntity implements ExpirableEntity {
         for (String field : pendingDel) {
             data.remove(field);
             dirty.remove(field);
+            increments.remove(field);
             deleted.add(field);
+        }
+        // logical increments are replayed as-is (not folded into dirty sets)
+        increments.putAll(pendingIncr);
+        for (String field : pendingDel) {
+            increments.remove(field);
+        }
+        for (String field : pending.keySet()) {
+            increments.remove(field);
         }
     }
 
     public void clearChangeTracking(Long newVersion) {
+        // materialize increments into data before clearing
+        for (Map.Entry<String, Long> e : increments.entrySet()) {
+            String current = data.get(e.getKey());
+            long base = 0L;
+            if (current != null && !Constants.NULL_SENTINEL.equals(current)) {
+                try {
+                    base = Long.parseLong(current);
+                } catch (NumberFormatException ignored) {
+                    base = 0L;
+                }
+            }
+            data.put(e.getKey(), Long.toString(base + e.getValue()));
+        }
         dirty.clear();
         deleted.clear();
+        increments.clear();
         created = false;
         markedForDelete = false;
         loadedVersion = newVersion;
@@ -218,9 +297,11 @@ public class MapEntity implements ExpirableEntity {
         data.clear();
         dirty.clear();
         deleted.clear();
+        increments.clear();
         data.putAll(other.data);
         dirty.addAll(other.dirty);
         deleted.addAll(other.deleted);
+        increments.putAll(other.increments);
         markedForDelete = other.markedForDelete;
         created = other.created;
         loadedVersion = other.loadedVersion;

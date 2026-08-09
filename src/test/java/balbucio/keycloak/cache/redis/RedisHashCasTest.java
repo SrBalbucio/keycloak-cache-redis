@@ -8,14 +8,16 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import java.util.List;
 import java.util.Map;
 
+import balbucio.keycloak.cache.redis.connection.LettuceRedisAsync;
+import balbucio.keycloak.cache.redis.connection.LettuceRedisSync;
+import balbucio.keycloak.cache.redis.connection.RedisAsync;
 import balbucio.keycloak.cache.redis.connection.RedisConnectionProvider;
 import balbucio.keycloak.cache.redis.connection.RedisMode;
+import balbucio.keycloak.cache.redis.connection.RedisSync;
 import com.redis.testcontainers.RedisContainer;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.api.StatefulRedisConnection;
-import io.lettuce.core.api.async.RedisAsyncCommands;
-import io.lettuce.core.api.sync.RedisCommands;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -48,22 +50,23 @@ class RedisHashCasTest {
 
         client = RedisClient.create(RedisURI.create(uri));
         connection = client.connect();
-        assumeTrue("PONG".equalsIgnoreCase(connection.sync().ping()), "Redis not reachable at " + uri);
-        casSha = RedisHashCas.load(connection.sync());
+        RedisSync sync = LettuceRedisSync.of(connection.sync());
+        assumeTrue("PONG".equalsIgnoreCase(sync.ping()), "Redis not reachable at " + uri);
+        casSha = RedisHashCas.load(sync);
         provider =
                 new RedisConnectionProvider() {
                     @Override
-                    public RedisCommands<String, String> sync() {
-                        return connection.sync();
+                    public RedisSync sync() {
+                        return LettuceRedisSync.of(connection.sync());
                     }
 
                     @Override
-                    public RedisAsyncCommands<String, String> async() {
-                        return connection.async();
+                    public RedisAsync async() {
+                        return LettuceRedisAsync.of(connection.async());
                     }
 
                     @Override
-                    public StatefulRedisPubSubConnection<String, String> pubSub() {
+                    public StatefulRedisPubSubConnection<String, String> connectPubSub() {
                         return client.connectPubSub();
                     }
 
@@ -103,7 +106,7 @@ class RedisHashCasTest {
     @BeforeEach
     void flush() {
         connection.sync().flushdb();
-        casSha = RedisHashCas.load(connection.sync());
+        casSha = RedisHashCas.load(LettuceRedisSync.of(connection.sync()));
     }
 
     private static boolean isDockerAvailable() {
@@ -167,5 +170,28 @@ class RedisHashCasTest {
     void scriptShaIsLoaded() {
         assertNotNull(provider.casScriptSha());
         assertTrue(provider.casScriptSha().length() > 0);
+    }
+
+    @Test
+    void logicalIncrementSurvivesViaOpsScript() {
+        String key = "cas:test:incr";
+        long expireAt = System.currentTimeMillis() + 60_000;
+
+        assertEquals(
+                1L,
+                RedisHashCas.hsetex(
+                        provider, key, null, expireAt, Map.of("numFailures", "2"), List.of()));
+        long ok =
+                RedisHashCas.hsetex(
+                        provider,
+                        key,
+                        1L,
+                        expireAt,
+                        Map.of(),
+                        List.of(),
+                        Map.of("numFailures", 3L));
+        assertEquals(1L, ok);
+        assertEquals("5", connection.sync().hget(key, "numFailures"));
+        assertEquals("2", connection.sync().hget(key, "version"));
     }
 }

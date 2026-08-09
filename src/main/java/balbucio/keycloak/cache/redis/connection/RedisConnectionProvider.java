@@ -1,17 +1,21 @@
 package balbucio.keycloak.cache.redis.connection;
 
-import io.lettuce.core.api.async.RedisAsyncCommands;
-import io.lettuce.core.api.sync.RedisCommands;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import org.keycloak.provider.Provider;
 
 public interface RedisConnectionProvider extends Provider {
 
-    RedisCommands<String, String> sync();
+    /** Shared synchronous command facade (standalone/sentinel/cluster). */
+    RedisSync sync();
 
-    RedisAsyncCommands<String, String> async();
+    /** Shared async command facade for pipelining. */
+    RedisAsync async();
 
-    StatefulRedisPubSubConnection<String, String> pubSub();
+    /**
+     * Opens a dedicated Pub/Sub connection. Caller owns the lifecycle and must {@code close()} it.
+     * Never reuse the shared command connection for subscribe.
+     */
+    StatefulRedisPubSubConnection<String, String> connectPubSub();
 
     RedisMode mode();
 
