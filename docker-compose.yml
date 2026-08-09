@@ -1,0 +1,36 @@
+volumes:
+  h2_data:
+    driver: local
+  valkey_data:
+    driver: local
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.1
+    volumes:
+      - h2_data:/opt/keycloak/data
+      - ./target/keycloak-cache-redis-1.0-SNAPSHOT-withdeps.jar:/opt/keycloak/providers/keycloak-cache-redis-1.0-SNAPSHOT-withdeps.jar
+    environment:
+      KC_CACHE: local
+      KC_COMMUNITY_REDIS_CACHE_ENABLED: "true"
+      KC_SPI_REDIS_CONNECTION_DEFAULT_MODE: standalone
+      KC_SPI_REDIS_CONNECTION_DEFAULT_NODES: valkey:6379
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_LOG_LEVEL: INFO,balbucio.keycloak.cache.redis:DEBUG
+    ports:
+      - "8080:8080"
+    entrypoint: ["/opt/keycloak/bin/kc.sh", "start-dev", "--verbose"]
+    depends_on:
+      - valkey
+
+  valkey:
+    image: valkey/valkey:8.1.5
+    ports:
+      - "6379:6379"
+    command: >
+      valkey-server
+      --appendonly yes
+      --protected-mode no
+    volumes:
+      - valkey_data:/data
