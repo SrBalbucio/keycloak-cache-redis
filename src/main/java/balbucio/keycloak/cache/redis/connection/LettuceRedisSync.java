@@ -63,6 +63,11 @@ public final class LettuceRedisSync implements RedisSync {
     }
 
     @Override
+    public Long incr(String key) {
+        return delegate.incr(key);
+    }
+
+    @Override
     public Long sadd(String key, String... members) {
         return delegate.sadd(key, members);
     }
@@ -169,6 +174,8 @@ public final class LettuceRedisSync implements RedisSync {
 
         Long exists(String... keys);
 
+        Long incr(String key);
+
         Long sadd(String key, String... members);
 
         Long srem(String key, String... members);
@@ -239,6 +246,11 @@ public final class LettuceRedisSync implements RedisSync {
         @Override
         public Long exists(String... keys) {
             return c.exists(keys);
+        }
+
+        @Override
+        public Long incr(String key) {
+            return c.incr(key);
         }
 
         @Override
@@ -362,6 +374,11 @@ public final class LettuceRedisSync implements RedisSync {
         @Override
         public Long exists(String... keys) {
             return c.exists(keys);
+        }
+
+        @Override
+        public Long incr(String key) {
+            return c.incr(key);
         }
 
         @Override

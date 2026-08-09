@@ -39,6 +39,22 @@ Copie para `providers/` do Keycloak.
 
 Com prefixo `kc`, as chaves ficam como `kc:user-session:<id>`, `kc:auth-session:<id>`, `kc:cluster:events`, etc.
 
+### Authorization Services (cache Redis)
+
+O cache de Authorization Services usa cache-aside sobre o store JPA (a fonte da verdade permanece no banco). Todas as 5 stores são cacheadas: `Resource` (findById/findByName), `ResourceServer` (findById/findByClient), `Scope` (findById/findByName), `Policy` (findById/findByResource), e `PermissionTicket` (findById, TTL curto). Invalidação por geração (`INCR` em `kc:authz:rs-gen:<rsId>`). Falhas de Redis são tratadas como cache miss (não-fatal). Opcionalmente, A4 habilita LRU local por nó + invalidação cross-node via PUBSUB no canal `kc:authz:invalidation`.
+
+| Variável | Descrição | Default |
+|---|---|---|
+| `KC_CACHE_REDIS_AUTHZ_ENABLED` | Liga/desliga o cache de authz | `true` |
+| `KC_CACHE_REDIS_AUTHZ_TTL_SECONDS` | TTL das entries de cache | `1800` (30 min) |
+| `KC_CACHE_REDIS_AUTHZ_PERMISSION_TICKET_TTL_SECONDS` | TTL de permission tickets | `300` (5 min) |
+| `KC_CACHE_REDIS_AUTHZ_GEN_TTL_SECONDS` | TTL da chave de geração | `604800` (7 dias) |
+| `KC_CACHE_REDIS_AUTHZ_LOCAL_LRU_ENABLED` | Liga LRU local por nó | `false` |
+| `KC_CACHE_REDIS_AUTHZ_LOCAL_LRU_MAX_SIZE` | Tamanho máximo do LRU local | `1000` |
+| `KC_CACHE_REDIS_AUTHZ_LOCAL_LRU_TTL_SECONDS` | TTL local por entry (LRU) | `30` |
+
+Detalhes: [docs/SPEC-AUTHORIZATION.md](docs/SPEC-AUTHORIZATION.md).
+
 ### Modos de conexão
 
 - **standalone** — um nó Redis/Valkey (padrão).
@@ -94,7 +110,7 @@ REDIS_TEST_URI=redis://127.0.0.1:6380 mvn test
 
 ## Limitações
 
-- Authorization Services: cache desativado (`NullCachedStoreProviderFactory`); authz fora do escopo.
+- Authorization Services: cache Redis cache-aside ativo (`RedisCachedStoreProviderFactory`); pode ser desativado com `KC_CACHE_REDIS_AUTHZ_ENABLED=false`.
 - Sem migração Infinispan → Redis (`importUserSessions` é no-op); após o switchover os usuários reautenticam.
 - Modo `cluster`: índices secundários sem atomicidade `MULTI/EXEC`.
 - Multi-region active-active: fora de escopo.

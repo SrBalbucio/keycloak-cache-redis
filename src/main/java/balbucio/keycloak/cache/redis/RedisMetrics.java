@@ -40,6 +40,8 @@ public final class RedisMetrics {
         public static final String LOGIN_FAILURE = "loginFailure";
         public static final String SINGLE_USE = "singleUse";
         public static final String CLUSTER = "cluster";
+        public static final String AUTHZ = "authz";
+        public static final String AUTHZ_GEN = "authzGen";
         public static final String GENERIC = "generic";
 
         private Cache() {}
@@ -55,6 +57,9 @@ public final class RedisMetrics {
         public static final String EVAL = "EVAL";
         public static final String PUBLISH = "PUBLISH";
         public static final String SMEMBERS = "SMEMBERS";
+        public static final String GET = "GET";
+        public static final String SET = "SET";
+        public static final String INCR = "INCR";
 
         private Op() {}
     }

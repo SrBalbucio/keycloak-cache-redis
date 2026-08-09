@@ -29,6 +29,8 @@ public interface RedisSync {
 
     Long exists(String... keys);
 
+    Long incr(String key);
+
     Long sadd(String key, String... members);
 
     Long srem(String key, String... members);
