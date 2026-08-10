@@ -1,3 +1,4 @@
+[![status-badge](https://woodpecker.internal.hyperpowered.net/api/badges/8/status.svg)](https://woodpecker.internal.hyperpowered.net/repos/8)
 # keycloak-cache-redis
 
 Extensão para Keycloak **26.7.1** que substitui caches distribuídos de sessão (Infinispan) por **Redis/Valkey**, via SPI
