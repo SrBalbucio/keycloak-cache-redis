@@ -50,8 +50,10 @@ Provider: `RedisUserLoginFailureProvider`
 
 | Tipo | Padrão |
 |------|--------|
-| Registro | `login-failure:<realmId>:<userId>` |
-| Índice | `login-failure:realm-index:<realmId>` |
+| Registro | `{<realmId>}:login-failure:<userId>` |
+| Índice | `{<realmId>}:login-failure:realm-index` |
+
+Hash-tags por realm permitem CAS + índices atômicos também em Redis Cluster.
 
 ## Single-use objects
 

@@ -93,6 +93,8 @@ public class DefaultRedisConnectionProviderFactory implements RedisConnectionPro
         }
 
         boolean ssl = Boolean.TRUE.equals(config.getBoolean("ssl", false));
+        // Default true when SSL is on — set sslVerifyPeer=false only for lab/self-signed setups.
+        boolean sslVerifyPeer = Boolean.TRUE.equals(config.getBoolean("sslVerifyPeer", true));
         String username = config.get("username");
         String password = config.get("password");
         Duration timeout = ProviderHelpers.parseTimeout(config.get("timeout", "2000ms"), Duration.ofMillis(2000));
@@ -112,7 +114,7 @@ public class DefaultRedisConnectionProviderFactory implements RedisConnectionPro
         keyPrefix = RedisKeySpace.prefix();
 
         clientResources = buildClientResources();
-        redisUris = buildUris(mode, hosts, ssl, username, password, timeout, database, masterName);
+        redisUris = buildUris(mode, hosts, ssl, sslVerifyPeer, username, password, timeout, database, masterName);
 
         switch (mode) {
             case CLUSTER -> initCluster();
@@ -165,6 +167,7 @@ public class DefaultRedisConnectionProviderFactory implements RedisConnectionPro
             RedisMode mode,
             List<ProviderHelpers.HostPort> hosts,
             boolean ssl,
+            boolean sslVerifyPeer,
             String username,
             String password,
             Duration timeout,
@@ -177,6 +180,7 @@ public class DefaultRedisConnectionProviderFactory implements RedisConnectionPro
                     RedisURI.builder()
                             .withSentinelMasterId(masterName)
                             .withSsl(ssl)
+                            .withVerifyPeer(ssl && sslVerifyPeer)
                             .withTimeout(timeout)
                             .withDatabase(database);
             for (ProviderHelpers.HostPort host : hosts) {
@@ -193,6 +197,7 @@ public class DefaultRedisConnectionProviderFactory implements RedisConnectionPro
                             .withHost(host.host())
                             .withPort(host.port())
                             .withSsl(ssl)
+                            .withVerifyPeer(ssl && sslVerifyPeer)
                             .withTimeout(timeout);
             if (mode != RedisMode.CLUSTER) {
                 builder.withDatabase(database);

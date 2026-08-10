@@ -9,10 +9,15 @@ Extensão para Keycloak **26.7.1** que substitui caches distribuídos de sessão
 
 Documentação completa: [docs/](docs/README.md).
 
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).
+
 ## Build
 
 ```bash
-mvn clean package
+./mvnw clean package
+# or: mvn clean package
 ```
 
 Artefato instalável:
@@ -33,6 +38,7 @@ Copie para `providers/` do Keycloak.
 | `KC_SPI_REDIS_CONNECTION_DEFAULT_NODES`       | `host:port` separados por vírgula                     | `redis:6379` |
 | `KC_SPI_REDIS_CONNECTION_DEFAULT_MASTER_NAME` | Obrigatório em modo `sentinel`                        | `mymaster`   |
 | `KC_SPI_REDIS_CONNECTION_DEFAULT_SSL`         | TLS                                                   | `false`      |
+| `KC_SPI_REDIS_CONNECTION_DEFAULT_SSL_VERIFY_PEER` | Verificar certificado TLS (com SSL)               | `true`       |
 | `KC_SPI_REDIS_CONNECTION_DEFAULT_USERNAME`    | Usuário Redis (opcional)                              |              |
 | `KC_SPI_REDIS_CONNECTION_DEFAULT_PASSWORD`    | Senha Redis (opcional)                                |              |
 | `KC_SPI_REDIS_CONNECTION_DEFAULT_TIMEOUT`     | `2000`, `2s`, `500ms`                                 | `2000ms`     |
@@ -113,10 +119,12 @@ Com métricas do Keycloak habilitadas (`/metrics`), a extensão registra:
 ## Testes
 
 ```bash
-mvn test
-# opcional: Redis já rodando
-REDIS_TEST_URI=redis://127.0.0.1:6380 mvn test
+./mvnw test
+# opcional: Redis externo (requer REDIS_TEST_ALLOW_FLUSH=true para limpar o DB)
+REDIS_TEST_URI=redis://127.0.0.1:6380 REDIS_TEST_ALLOW_FLUSH=true ./mvnw test
 ```
+
+CI: [.github/workflows/ci.yml](.github/workflows/ci.yml). Changelog: [CHANGELOG.md](CHANGELOG.md).
 
 ## Limitações
 
@@ -124,5 +132,5 @@ Resumo; detalhes em [docs/limitations.md](docs/limitations.md).
 
 - Authorization Services: cache Redis cache-aside ativo; desative com `KC_CACHE_REDIS_AUTHZ_ENABLED=false`.
 - Sem migração Infinispan → Redis (`importUserSessions` é no-op); após o switchover os usuários reautenticam.
-- Modo Redis `cluster`: índices secundários sem atomicidade `MULTI/EXEC`.
+- Modo Redis `cluster`: CAS+índices atômicos só quando as chaves compartilham slot (hash-tags); senão fallback best-effort.
 - Sticky session: desnecessária (shim `DisabledStickySessionEncoderProvider`).

@@ -29,8 +29,16 @@ public final class IntegrationRedis {
     private static StatefulRedisConnection<String, String> connection;
     private static RedisConnectionProvider provider;
     private static boolean started;
+    /** True when Redis was started by Testcontainers (safe to FLUSHDB). */
+    private static boolean ownsInstance;
 
     private IntegrationRedis() {}
+
+    /** Whether {@link #flush()} may wipe the entire logical database. */
+    public static boolean ownsInstance() {
+        ensureStarted();
+        return ownsInstance;
+    }
 
     public static boolean available() {
         if (externalUri() != null) {
@@ -89,7 +97,32 @@ public final class IntegrationRedis {
             }
             provider = null;
             started = false;
+            ownsInstance = false;
         }
+    }
+
+    /**
+     * Clears test data. Uses {@code FLUSHDB} only for the ephemeral Testcontainers instance. For an
+     * external {@code REDIS_TEST_URI}, requires {@code REDIS_TEST_ALLOW_FLUSH=true} or skips wipe
+     * (tests may see leftover keys).
+     */
+    public static void flush() {
+        ensureStarted();
+        if (ownsInstance || allowExternalFlush()) {
+            connection.sync().flushdb();
+            return;
+        }
+        throw new IllegalStateException(
+                "Refusing FLUSHDB on external REDIS_TEST_URI. Start Testcontainers, use a dedicated "
+                        + "DB, or set REDIS_TEST_ALLOW_FLUSH=true");
+    }
+
+    private static boolean allowExternalFlush() {
+        String env = System.getenv("REDIS_TEST_ALLOW_FLUSH");
+        if (env != null && ("1".equals(env) || "true".equalsIgnoreCase(env))) {
+            return true;
+        }
+        return Boolean.getBoolean("redis.test.allowFlush");
     }
 
     private static String externalUri() {
@@ -111,6 +144,9 @@ public final class IntegrationRedis {
                 container = new RedisContainer(DockerImageName.parse("redis:7.2-alpine"));
                 container.start();
                 uri = container.getRedisURI();
+                ownsInstance = true;
+            } else {
+                ownsInstance = false;
             }
             client = RedisClient.create(RedisURI.create(uri));
             connection = client.connect();

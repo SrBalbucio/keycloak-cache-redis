@@ -9,7 +9,8 @@ public record LoginFailureKey(String realmId, String userId) implements Key {
 
     @Override
     public String key() {
-        return RedisKeySpace.key("login-failure:" + realmId + ":" + userId);
+        // Hash-tag by realm so entity + realm index share a cluster slot.
+        return RedisKeySpace.taggedKey(realmId, "login-failure:" + userId);
     }
 
     public static LoginFailureKey of(String realmId, String userId) {

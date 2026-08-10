@@ -2,12 +2,15 @@ package balbucio.keycloak.cache.redis;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import balbucio.keycloak.cache.redis.common.Constants;
 import balbucio.keycloak.cache.redis.connection.RedisConnectionProvider;
 import balbucio.keycloak.cache.redis.connection.RedisSync;
+import io.lettuce.core.RedisCommandExecutionException;
 import io.lettuce.core.RedisNoScriptException;
 import io.lettuce.core.ScriptOutputType;
 
@@ -112,6 +115,104 @@ public final class RedisHashCas {
             return 1
             """;
 
+    /**
+     * CAS + optional increments + index SADD/SREM + index PEXPIREAT in one atomic script.
+     *
+     * <p>KEYS[1] = entity hash; KEYS[2..] = distinct index keys referenced by ops.
+     * ARGV after the CAS/incr section: nIdxOps, then for each op: (op, keyIndex, member) where
+     * op is {@code 1}=SADD or {@code 0}=SREM and keyIndex is 1-based into KEYS.
+     */
+    public static final String SCRIPT_WITH_INDEXES =
+            """
+            local key = KEYS[1]
+            local expected = ARGV[1]
+            local expireAt = tonumber(ARGV[2])
+            local nSet = tonumber(ARGV[3])
+            local nDel = tonumber(ARGV[4])
+            if (nSet == nil) or (nDel == nil) then
+              return -2
+            end
+            local current = redis.call('HGET', key, 'version')
+            if expected == '' then
+              if current ~= false then
+                return -1
+              end
+            else
+              if current == false or tostring(current) ~= tostring(expected) then
+                return 0
+              end
+            end
+            local idx = 5
+            for i = 1, nSet do
+              local field = ARGV[idx]
+              local value = ARGV[idx + 1]
+              idx = idx + 2
+              redis.call('HSET', key, field, value)
+            end
+            for i = 1, nDel do
+              local field = ARGV[idx]
+              idx = idx + 1
+              redis.call('HDEL', key, field)
+            end
+            local nIncr = tonumber(ARGV[idx])
+            idx = idx + 1
+            if nIncr == nil then
+              return -2
+            end
+            for i = 1, nIncr do
+              local field = ARGV[idx]
+              local delta = tonumber(ARGV[idx + 1])
+              idx = idx + 2
+              redis.call('HINCRBY', key, field, delta)
+            end
+            redis.call('HINCRBY', key, 'version', 1)
+            if expireAt ~= nil and expireAt > 0 then
+              redis.call('PEXPIREAT', key, expireAt)
+            end
+            local nIdx = tonumber(ARGV[idx])
+            idx = idx + 1
+            if nIdx == nil then
+              return -2
+            end
+            for i = 1, nIdx do
+              local op = tonumber(ARGV[idx])
+              local keyIndex = tonumber(ARGV[idx + 1])
+              local member = ARGV[idx + 2]
+              idx = idx + 3
+              local indexKey = KEYS[keyIndex]
+              if op == 1 then
+                redis.call('SADD', indexKey, member)
+                if expireAt ~= nil and expireAt > 0 then
+                  local ttl = redis.call('PTTL', indexKey)
+                  local now = tonumber(redis.call('TIME')[1]) * 1000
+                  local desired = expireAt - now
+                  if ttl < 0 or (desired > 0 and ttl < desired) then
+                    redis.call('PEXPIREAT', indexKey, expireAt)
+                  end
+                end
+              else
+                redis.call('SREM', indexKey, member)
+              end
+            end
+            return 1
+            """;
+
+    /** Delete entity hash and remove members from index keys atomically. */
+    public static final String SCRIPT_DELETE_WITH_INDEXES =
+            """
+            local key = KEYS[1]
+            redis.call('DEL', key)
+            local nIdx = tonumber(ARGV[1])
+            local idx = 2
+            for i = 1, nIdx do
+              local keyIndex = tonumber(ARGV[idx])
+              local member = ARGV[idx + 1]
+              idx = idx + 2
+              redis.call('SREM', KEYS[keyIndex], member)
+            end
+            return 1
+            """;
+
     private RedisHashCas() {}
 
     public static String load(RedisSync sync) {
@@ -135,6 +236,151 @@ public final class RedisHashCas {
      * CAS update with additional logical increments ({@code field -> delta}).
      */
     public static long hsetex(
+            RedisConnectionProvider connection,
+            String key,
+            Long expectedVersion,
+            long expireAtMillis,
+            Map<String, String> toSet,
+            Collection<String> toDelete,
+            Map<String, Long> increments) {
+        return hsetex(
+                connection,
+                key,
+                expectedVersion,
+                expireAtMillis,
+                toSet,
+                toDelete,
+                increments,
+                List.of(),
+                List.of());
+    }
+
+    /**
+     * CAS update with index membership deltas. When index keys share a hash slot with {@code key}
+     * (standalone/sentinel always; cluster when hash-tagged), the whole update is atomic. On Redis
+     * Cluster {@code CROSSSLOT}, falls back to CAS-only then best-effort index updates.
+     */
+    public static long hsetex(
+            RedisConnectionProvider connection,
+            String key,
+            Long expectedVersion,
+            long expireAtMillis,
+            Map<String, String> toSet,
+            Collection<String> toDelete,
+            Map<String, Long> increments,
+            Collection<IndexOp> indexAdds,
+            Collection<IndexOp> indexRemoves) {
+
+        Map<String, Long> incr = increments == null ? Map.of() : increments;
+        List<IndexOp> adds = indexAdds == null ? List.of() : List.copyOf(indexAdds);
+        List<IndexOp> removes = indexRemoves == null ? List.of() : List.copyOf(indexRemoves);
+
+        if (adds.isEmpty() && removes.isEmpty()) {
+            return hsetexPlain(connection, key, expectedVersion, expireAtMillis, toSet, toDelete, incr);
+        }
+
+        List<String> keys = new ArrayList<>();
+        keys.add(key);
+        Map<String, Integer> keyIndex = new java.util.LinkedHashMap<>();
+        keyIndex.put(key, 1);
+
+        List<String> args = new ArrayList<>();
+        args.add(expectedVersion == null ? "" : Long.toString(expectedVersion));
+        args.add(Long.toString(expireAtMillis));
+        args.add(Integer.toString(toSet.size()));
+        args.add(Integer.toString(toDelete.size()));
+        for (Map.Entry<String, String> e : toSet.entrySet()) {
+            args.add(e.getKey());
+            args.add(e.getValue() == null ? Constants.NULL_SENTINEL : e.getValue());
+        }
+        for (String field : toDelete) {
+            args.add(field);
+        }
+        args.add(Integer.toString(incr.size()));
+        for (Map.Entry<String, Long> e : incr.entrySet()) {
+            args.add(e.getKey());
+            args.add(Long.toString(e.getValue()));
+        }
+
+        List<IndexOp> allOps = new ArrayList<>(removes.size() + adds.size());
+        allOps.addAll(removes);
+        allOps.addAll(adds);
+        args.add(Integer.toString(allOps.size()));
+        for (IndexOp op : allOps) {
+            int ki = keyIndex.computeIfAbsent(op.indexKey(), k -> {
+                keys.add(k);
+                return keys.size();
+            });
+            args.add(op.add() ? "1" : "0");
+            args.add(Integer.toString(ki));
+            args.add(op.member());
+        }
+
+        RedisSync sync = connection.sync();
+        String[] keyArr = keys.toArray(new String[0]);
+        String[] argv = args.toArray(new String[0]);
+        try {
+            Long result =
+                    sync.eval(SCRIPT_WITH_INDEXES, ScriptOutputType.INTEGER, keyArr, argv);
+            return result == null ? -2 : result;
+        } catch (RedisCommandExecutionException ex) {
+            if (!isCrossSlot(ex)) {
+                throw ex;
+            }
+            // Cluster: entity and indexes on different slots — CAS then best-effort indexes.
+            long result =
+                    hsetexPlain(connection, key, expectedVersion, expireAtMillis, toSet, toDelete, incr);
+            if (result == 1) {
+                applyIndexesBestEffort(sync, expireAtMillis, removes, adds);
+            }
+            return result;
+        }
+    }
+
+    /** Atomically delete a hash and SREM its index memberships when slots allow. */
+    public static void deleteWithIndexes(
+            RedisConnectionProvider connection, String key, Collection<IndexOp> indexRemoves) {
+        List<IndexOp> removes =
+                indexRemoves == null
+                        ? List.of()
+                        : indexRemoves.stream().filter(op -> op.member() != null).toList();
+        if (removes.isEmpty()) {
+            connection.sync().del(key);
+            return;
+        }
+
+        List<String> keys = new ArrayList<>();
+        keys.add(key);
+        Map<String, Integer> keyIndex = new java.util.LinkedHashMap<>();
+        keyIndex.put(key, 1);
+        List<String> args = new ArrayList<>();
+        args.add(Integer.toString(removes.size()));
+        for (IndexOp op : removes) {
+            int ki = keyIndex.computeIfAbsent(op.indexKey(), k -> {
+                keys.add(k);
+                return keys.size();
+            });
+            args.add(Integer.toString(ki));
+            args.add(op.member());
+        }
+
+        RedisSync sync = connection.sync();
+        try {
+            sync.eval(
+                    SCRIPT_DELETE_WITH_INDEXES,
+                    ScriptOutputType.INTEGER,
+                    keys.toArray(new String[0]),
+                    args.toArray(new String[0]));
+        } catch (RedisCommandExecutionException ex) {
+            if (!isCrossSlot(ex)) {
+                throw ex;
+            }
+            sync.del(key);
+            applyIndexesBestEffort(sync, 0L, removes, List.of());
+        }
+    }
+
+    private static long hsetexPlain(
             RedisConnectionProvider connection,
             String key,
             Long expectedVersion,
@@ -182,5 +428,66 @@ public final class RedisHashCas {
         }
         Long result = sync.eval(script, ScriptOutputType.INTEGER, new String[] {key}, argv);
         return result == null ? -2 : result;
+    }
+
+    private static void applyIndexesBestEffort(
+            RedisSync sync, long expireAtMillis, Collection<IndexOp> removes, Collection<IndexOp> adds) {
+        for (IndexOp op : removes) {
+            if (op.member() != null) {
+                sync.srem(op.indexKey(), op.member());
+                RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.SREM);
+            }
+        }
+        for (IndexOp op : adds) {
+            if (op.member() != null) {
+                sync.sadd(op.indexKey(), op.member());
+                RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.SADD);
+                refreshIndexTtl(sync, op.indexKey(), expireAtMillis);
+            }
+        }
+    }
+
+    static void refreshIndexTtl(RedisSync sync, String indexKey, long expireAtMillis) {
+        if (expireAtMillis <= 0) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long remaining = expireAtMillis - now;
+        if (remaining <= 0) {
+            return;
+        }
+        Long pttl = sync.pttl(indexKey);
+        if (pttl == null || pttl < remaining) {
+            sync.pexpire(indexKey, remaining);
+        }
+    }
+
+    private static boolean isCrossSlot(RuntimeException ex) {
+        String msg = ex.getMessage();
+        return msg != null && (msg.contains("CROSSSLOT") || msg.contains("crossslot"));
+    }
+
+    /** Index membership mutation applied with CAS or delete. */
+    public record IndexOp(String indexKey, String member, boolean add) {
+        public static IndexOp add(String indexKey, String member) {
+            return new IndexOp(indexKey, member, true);
+        }
+
+        public static IndexOp remove(String indexKey, String member) {
+            return new IndexOp(indexKey, member, false);
+        }
+    }
+
+    /** Build unique index key list for KEYS arrays. */
+    public static List<String> distinctIndexKeys(Collection<IndexOp> ops) {
+        Set<String> keys = new LinkedHashSet<>();
+        if (ops != null) {
+            for (IndexOp op : ops) {
+                if (op != null && op.indexKey() != null) {
+                    keys.add(op.indexKey());
+                }
+            }
+        }
+        return List.copyOf(keys);
     }
 }

@@ -7,6 +7,6 @@ public final class LoginFailureIndexes {
     private LoginFailureIndexes() {}
 
     public static String realmIndex(String realmId) {
-        return RedisKeySpace.key("login-failure:realm-index:" + realmId);
+        return RedisKeySpace.taggedKey(realmId, "login-failure:realm-index");
     }
 }

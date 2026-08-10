@@ -15,7 +15,9 @@ import org.keycloak.authorization.model.Resource;
 import org.keycloak.authorization.model.ResourceServer;
 import org.keycloak.authorization.model.Scope;
 import org.keycloak.authorization.store.ResourceStore;
+import org.keycloak.authorization.store.ScopeStore;
 import org.keycloak.models.KeycloakSession;
+import org.keycloak.models.cache.authorization.CachedStoreFactoryProvider;
 
 /**
  * {@link Resource} backed by a {@link CachedResource} snapshot for reads and a lazily-loaded JPA
@@ -115,7 +117,11 @@ public class ResourceAdapter implements Resource {
         if (delegate != null) {
             return delegate.getScopes();
         }
-        return Collections.emptyList();
+        List<String> ids = cached.getScopeIds();
+        if (ids == null || ids.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return resolveScopes(ids);
     }
 
     @Override
@@ -210,6 +216,18 @@ public class ResourceAdapter implements Resource {
     @Override
     public void removeAttribute(String name) {
         getDelegateForUpdate().removeAttribute(name);
+    }
+
+    private List<Scope> resolveScopes(List<String> ids) {
+        ScopeStore store = session.getProvider(CachedStoreFactoryProvider.class).getScopeStore();
+        List<Scope> result = new ArrayList<>(ids.size());
+        for (String id : ids) {
+            Scope scope = store.findById(resourceServer, id);
+            if (scope != null) {
+                result.add(scope);
+            }
+        }
+        return result;
     }
 
     /**

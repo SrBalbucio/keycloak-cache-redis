@@ -40,8 +40,8 @@ KC_SPI_REDIS_CONNECTION_DEFAULT_MASTER_NAME=mymaster
 Lista de seed nodes em `NODES`. Em Redis Cluster:
 
 - o índice de database é forçado a `0`;
-- `MULTI/EXEC` para atualização de índices secundários é desativado;
-- índices ficam com consistência eventual (comandos individuais).
+- `MULTI/EXEC` genérico é desativado;
+- commits usam Lua CAS + índices quando as chaves compartilham slot (ex.: login-failure com hash-tag `{realmId}`); caso contrário há fallback best-effort (`CROSSSLOT`).
 
 ```bash
 KC_SPI_REDIS_CONNECTION_DEFAULT_MODE=cluster
@@ -59,9 +59,11 @@ O sufixo `:` é aplicado automaticamente quando necessário. Exemplo: `kc` → t
 
 ## Segurança e timeouts
 
-- `SSL=true` habilita TLS no cliente Lettuce.
-- `USERNAME` / `PASSWORD` são opcionais (ACL Redis).
+- `SSL=true` habilita TLS no cliente Lettuce (use rede confiável ou TLS em produção).
+- `sslVerifyPeer` (default `true` com SSL) controla verificação do certificado; desligue só em lab.
+- `USERNAME` / `PASSWORD` são opcionais (ACL Redis recomendado; isole por `KEY_PREFIX` em Redis compartilhado).
 - `TIMEOUT` aceita formatos como `2000`, `2s`, `500ms`.
+- Eventos de cluster no PUBSUB usam allowlist Jackson (sem `DefaultTyping` aberto).
 
 ## Observabilidade
 

@@ -131,6 +131,14 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
         listeners.add(taskKey, task);
     }
 
+    private static final String UNLOCK_SCRIPT =
+            """
+            if redis.call('GET', KEYS[1]) == ARGV[1] then
+              return redis.call('DEL', KEYS[1])
+            end
+            return 0
+            """;
+
     @Override
     public <T> ExecutionResult<T> executeIfNotExecuted(
             String taskKey, int lifespanSeconds, Callable<T> task) {
@@ -148,12 +156,24 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
                     throw re;
                 } catch (Exception e) {
                     throw new RuntimeException("Unexpected exception when executed task " + taskKey, e);
+                } finally {
+                    try {
+                        publisher.eval(
+                                UNLOCK_SCRIPT,
+                                io.lettuce.core.ScriptOutputType.INTEGER,
+                                new String[] {lockKey},
+                                taskId);
+                    } catch (Exception unlockError) {
+                        LOG.debugf(unlockError, "Failed to release cluster lock %s", lockKey);
+                    }
                 }
             }
+            return ExecutionResult.notExecuted();
         } catch (Exception e) {
-            LOG.warnf(e, "Error acquiring cluster lock for %s", taskKey);
+            // Distinguish Redis errors from "lock held" so callers can retry / alert.
+            LOG.warnf(e, "Error acquiring or running cluster lock for %s", taskKey);
+            throw new RuntimeException("Redis error during cluster lock for " + taskKey, e);
         }
-        return ExecutionResult.notExecuted();
     }
 
     @Override

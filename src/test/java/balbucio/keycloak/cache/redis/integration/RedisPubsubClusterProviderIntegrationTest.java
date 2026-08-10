@@ -79,31 +79,46 @@ class RedisPubsubClusterProviderIntegrationTest extends AbstractRedisIntegration
     }
 
     @Test
-    void executeIfNotExecutedRunsOnlyOnce() {
+    void executeIfNotExecutedRunsOnlyOnceWhileLockHeld() throws Exception {
         RedisConnectionProvider conn = provider();
         RedisSync publisher = conn.sync();
         ExecutorService executor = Executors.newCachedThreadPool();
         try {
-            RedisPubsubClusterProvider provider =
+            RedisPubsubClusterProvider cluster =
                     new RedisPubsubClusterProvider(publisher, conn.connectPubSub(), 100, executor, "node-a");
 
             AtomicInteger runs = new AtomicInteger();
-            ExecutionResult<String> first =
-                    provider.executeIfNotExecuted(
-                            TASK_KEY, 30, () -> {
-                                runs.incrementAndGet();
-                                return "done";
-                            });
-            ExecutionResult<String> second =
-                    provider.executeIfNotExecuted(
-                            TASK_KEY, 30, () -> {
-                                runs.incrementAndGet();
-                                return "done";
-                            });
+            CountDownLatch started = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
 
+            var firstFuture =
+                    executor.submit(
+                            () ->
+                                    cluster.executeIfNotExecuted(
+                                            TASK_KEY,
+                                            30,
+                                            () -> {
+                                                started.countDown();
+                                                assertTrue(release.await(5, TimeUnit.SECONDS));
+                                                runs.incrementAndGet();
+                                                return "done";
+                                            }));
+
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            ExecutionResult<String> second =
+                    cluster.executeIfNotExecuted(
+                            TASK_KEY,
+                            30,
+                            () -> {
+                                runs.incrementAndGet();
+                                return "done";
+                            });
+            assertFalse(second.isExecuted());
+
+            release.countDown();
+            ExecutionResult<String> first = firstFuture.get(5, TimeUnit.SECONDS);
             assertTrue(first.isExecuted());
             assertEquals("done", first.getResult());
-            assertFalse(second.isExecuted());
             assertEquals(1, runs.get());
         } finally {
             executor.shutdownNow();

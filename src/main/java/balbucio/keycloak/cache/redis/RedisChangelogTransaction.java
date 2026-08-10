@@ -5,6 +5,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -15,7 +16,6 @@ import java.util.function.Function;
 import balbucio.keycloak.cache.redis.common.Constants;
 import balbucio.keycloak.cache.redis.connection.RedisAsync;
 import balbucio.keycloak.cache.redis.connection.RedisConnectionProvider;
-import balbucio.keycloak.cache.redis.connection.RedisSync;
 import org.jboss.logging.Logger;
 import org.keycloak.common.util.Time;
 import org.keycloak.models.AbstractKeycloakTransaction;
@@ -23,25 +23,28 @@ import org.keycloak.models.KeycloakSession;
 
 /**
  * Unit-of-work for Redis hash entities, enlisted via {@code enlistAfterCompletion}.
+ *
+ * <p>Tracks loaded index memberships so updates SREM stale members, cleans indexes when entities
+ * expire on read, and commits hash + index deltas atomically via Lua when Redis slots allow.
  */
 public class RedisChangelogTransaction<K extends Key, A extends MapEntity> extends AbstractKeycloakTransaction {
 
     private static final Logger LOG = Logger.getLogger(RedisChangelogTransaction.class);
 
-    private final KeycloakSession session;
     private final RedisConnectionProvider connection;
     private final AdapterSupplier<K, A> adapterSupplier;
     private final Function<A, Collection<IndexUpdate>> indexFunction;
 
     private final Map<K, A> cache = new LinkedHashMap<>();
     private final Map<K, PendingDelete<K, A>> toDelete = new LinkedHashMap<>();
+    /** Index memberships observed when the entity was loaded (empty for creates). */
+    private final Map<K, Set<IndexUpdate>> loadedIndexes = new LinkedHashMap<>();
 
     public RedisChangelogTransaction(
             KeycloakSession session,
             RedisConnectionProvider connection,
             AdapterSupplier<K, A> adapterSupplier,
             Function<A, Collection<IndexUpdate>> indexFunction) {
-        this.session = session;
         this.connection = connection;
         this.adapterSupplier = adapterSupplier;
         this.indexFunction = indexFunction == null ? a -> List.of() : indexFunction;
@@ -53,6 +56,7 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
         Objects.requireNonNull(entity, "entity");
         cache.put(key, entity);
         toDelete.remove(key);
+        loadedIndexes.put(key, Set.of());
         return entity;
     }
 
@@ -71,12 +75,12 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
         }
         MapEntity entity = MapEntity.fromRedis(hash);
         if (entity.isExpired(Time.currentTimeMillis())) {
-            connection.sync().del(key.key());
-            RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.DEL);
+            purgeExpired(key, entity);
             return null;
         }
         A adapter = adapterSupplier.create(key, entity);
         cache.put(key, adapter);
+        rememberLoadedIndexes(key, adapter);
         return adapter;
     }
 
@@ -122,10 +126,12 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
                 }
                 MapEntity entity = MapEntity.fromRedis(hash);
                 if (entity.isExpired(now)) {
+                    purgeExpired(key, entity);
                     continue;
                 }
                 A adapter = adapterSupplier.create(key, entity);
                 cache.put(key, adapter);
+                rememberLoadedIndexes(key, adapter);
                 result.put(key, adapter);
             }
         } finally {
@@ -141,13 +147,16 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
             cache.remove(key);
         }
         if (entity != null) {
-            // snapshot index removals before the adapter is marked for delete, since index
-            // functions may read fields that are no longer readable once deleted
-            List<IndexUpdate> removals = new ArrayList<>(indexFunction.apply(entity));
+            // Prefer loaded indexes (pre-mutation); fall back to current computation.
+            Set<IndexUpdate> loaded = loadedIndexes.get(key);
+            List<IndexUpdate> removals =
+                    loaded != null && !loaded.isEmpty()
+                            ? new ArrayList<>(loaded)
+                            : new ArrayList<>(indexFunction.apply(entity));
             entity.markForDelete();
             toDelete.put(key, new PendingDelete<>(entity, removals));
+            loadedIndexes.remove(key);
         } else {
-            // ensure key is removed even if not loaded
             MapEntity tombstone = MapEntity.createNew();
             tombstone.markForDelete();
             toDelete.put(key, new PendingDelete<>(adapterSupplier.create(key, tombstone), List.of()));
@@ -160,25 +169,19 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
 
     @Override
     protected void commitImpl() {
-        RedisSync sync = connection.sync();
-
-        // Deletes + index removals
-        if (!toDelete.isEmpty()) {
-            runIndexBatch(
-                    sync,
-                    () -> {
-                        for (Map.Entry<K, PendingDelete<K, A>> e : toDelete.entrySet()) {
-                            sync.del(e.getKey().key());
-                            for (IndexUpdate index : e.getValue().indexRemovals()) {
-                                if (index.member() != null) {
-                                    sync.srem(index.indexKey(), index.member());
-                                }
-                            }
-                        }
-                    });
+        // Deletes + index removals (atomic when slots allow)
+        for (Map.Entry<K, PendingDelete<K, A>> e : toDelete.entrySet()) {
+            List<RedisHashCas.IndexOp> removals = new ArrayList<>();
+            for (IndexUpdate index : e.getValue().indexRemovals()) {
+                if (index.member() != null) {
+                    removals.add(RedisHashCas.IndexOp.remove(index.indexKey(), index.member()));
+                }
+            }
+            RedisHashCas.deleteWithIndexes(connection, e.getKey().key(), removals);
+            RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.DEL);
         }
 
-        // Dirty entities via CAS
+        // Dirty entities via CAS (+ index deltas)
         for (Map.Entry<K, A> e : cache.entrySet()) {
             A entity = e.getValue();
             if (entity.isMarkedForDelete() || !entity.hasPendingChanges()) {
@@ -189,6 +192,7 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
 
         cache.clear();
         toDelete.clear();
+        loadedIndexes.clear();
     }
 
     private void commitEntity(K key, A entity) {
@@ -205,14 +209,43 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
             toDeleteFields.remove(Constants.VERSION_FIELD);
             Map<String, Long> increments = entity.pendingIncrements();
 
+            Set<IndexUpdate> previous = loadedIndexes.getOrDefault(key, Set.of());
+            Set<IndexUpdate> next = new LinkedHashSet<>(indexFunction.apply(entity));
+            List<RedisHashCas.IndexOp> adds = new ArrayList<>();
+            List<RedisHashCas.IndexOp> removes = new ArrayList<>();
+            for (IndexUpdate idx : next) {
+                if (idx.member() != null && !previous.contains(idx)) {
+                    adds.add(RedisHashCas.IndexOp.add(idx.indexKey(), idx.member()));
+                }
+            }
+            for (IndexUpdate idx : previous) {
+                if (idx.member() != null && !next.contains(idx)) {
+                    removes.add(RedisHashCas.IndexOp.remove(idx.indexKey(), idx.member()));
+                }
+            }
+            // Always refresh TTL / ensure membership for current indexes on successful write
+            for (IndexUpdate idx : next) {
+                if (idx.member() != null && previous.contains(idx)) {
+                    adds.add(RedisHashCas.IndexOp.add(idx.indexKey(), idx.member()));
+                }
+            }
+
             long result =
                     RedisHashCas.hsetex(
-                            connection, key.key(), expected, expireAt, toSet, toDeleteFields, increments);
+                            connection,
+                            key.key(),
+                            expected,
+                            expireAt,
+                            toSet,
+                            toDeleteFields,
+                            increments,
+                            adds,
+                            removes);
             RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.HSETEX);
             if (result == 1) {
                 long newVersion = expected == null ? 1L : expected + 1L;
                 entity.clearChangeTracking(newVersion);
-                writeIndexes(entity, true);
+                loadedIndexes.put(key, Set.copyOf(next));
                 return;
             }
             if (result == -1) {
@@ -226,65 +259,38 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
             Map<String, String> fresh = connection.sync().hgetall(key.key());
             if (fresh == null || fresh.isEmpty()) {
                 entity.rebase(null);
-                if (expected == null) {
-                    continue;
-                }
-                entity.rebase(null);
+                loadedIndexes.put(key, Set.of());
             } else {
                 entity.rebase(fresh);
+                rememberLoadedIndexes(key, entity);
             }
         }
         throw new IllegalStateException(
                 "Failed to commit entity after " + Constants.CAS_MAX_RETRIES + " CAS retries: " + key.key());
     }
 
-    private void writeIndexes(A entity, boolean add) {
-        Collection<IndexUpdate> indexes = indexFunction.apply(entity);
-        if (indexes.isEmpty()) {
-            return;
+    private void purgeExpired(K key, MapEntity entity) {
+        A adapter = adapterSupplier.create(key, entity);
+        List<RedisHashCas.IndexOp> removals = new ArrayList<>();
+        for (IndexUpdate index : indexFunction.apply(adapter)) {
+            if (index.member() != null) {
+                removals.add(RedisHashCas.IndexOp.remove(index.indexKey(), index.member()));
+            }
         }
-        RedisSync sync = connection.sync();
-        runIndexBatch(
-                sync,
-                () -> {
-                    for (IndexUpdate index : indexes) {
-                        if (index.member() == null) {
-                            continue;
-                        }
-                        if (add) {
-                            sync.sadd(index.indexKey(), index.member());
-                        } else {
-                            sync.srem(index.indexKey(), index.member());
-                        }
-                    }
-                });
+        RedisHashCas.deleteWithIndexes(connection, key.key(), removals);
+        RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.DEL);
+        loadedIndexes.remove(key);
     }
 
-    private void runIndexBatch(RedisSync sync, Runnable commands) {
-        if (!sync.supportsTransactions()) {
-            commands.run();
-            RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.SADD);
-            return;
-        }
-        sync.multi();
-        try {
-            commands.run();
-            sync.exec();
-            RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.SADD);
-        } catch (RuntimeException ex) {
-            try {
-                sync.discard();
-            } catch (RuntimeException ignored) {
-                // ignore
-            }
-            throw ex;
-        }
+    private void rememberLoadedIndexes(K key, A adapter) {
+        loadedIndexes.put(key, Set.copyOf(indexFunction.apply(adapter)));
     }
 
     @Override
     protected void rollbackImpl() {
         cache.clear();
         toDelete.clear();
+        loadedIndexes.clear();
     }
 
     public record IndexUpdate(String indexKey, String member) {}

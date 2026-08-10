@@ -32,4 +32,11 @@ class RedisKeySpaceTest {
         assertEquals("prod:", RedisKeySpace.prefix());
         assertEquals("prod:login-failure:r:u", RedisKeySpace.key("login-failure:r:u"));
     }
+
+    @Test
+    void taggedKeyInsertsHashTag() {
+        RedisKeySpace.configure("kc");
+        assertEquals("kc:{realm-1}:login-failure:user-2", RedisKeySpace.taggedKey("realm-1", "login-failure:user-2"));
+        assertEquals("kc:{realm-1}:login-failure:realm-index", RedisKeySpace.taggedKey("realm-1", "login-failure:realm-index"));
+    }
 }

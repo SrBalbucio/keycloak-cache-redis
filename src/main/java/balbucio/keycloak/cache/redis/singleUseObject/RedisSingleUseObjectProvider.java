@@ -10,7 +10,6 @@ import java.util.Objects;
 import balbucio.keycloak.cache.redis.RedisMetrics;
 import balbucio.keycloak.cache.redis.common.Constants;
 import balbucio.keycloak.cache.redis.connection.RedisConnectionProvider;
-import balbucio.keycloak.cache.redis.connection.RedisSync;
 import io.lettuce.core.ScriptOutputType;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.ModelException;
@@ -55,6 +54,46 @@ public class RedisSingleUseObjectProvider implements SingleUseObjectProvider {
             return 1
             """;
 
+    /** Replace key contents and set TTL in one round-trip (DEL+HSET+PEXPIRE). */
+    private static final String PUT_SCRIPT =
+            """
+            redis.call('DEL', KEYS[1])
+            local ttl = tonumber(ARGV[1])
+            local n = tonumber(ARGV[2])
+            local idx = 3
+            for i = 1, n do
+              redis.call('HSET', KEYS[1], ARGV[idx], ARGV[idx + 1])
+              idx = idx + 2
+            end
+            if ttl ~= nil and ttl > 0 then
+              redis.call('PEXPIRE', KEYS[1], ttl)
+            end
+            return 1
+            """;
+
+    /**
+     * Atomically replace notes while preserving remaining TTL. Returns 0 if key missing, 1 on
+     * success.
+     */
+    private static final String REPLACE_SCRIPT =
+            """
+            if redis.call('EXISTS', KEYS[1]) == 0 then
+              return 0
+            end
+            local ttl = redis.call('PTTL', KEYS[1])
+            redis.call('DEL', KEYS[1])
+            local n = tonumber(ARGV[1])
+            local idx = 2
+            for i = 1, n do
+              redis.call('HSET', KEYS[1], ARGV[idx], ARGV[idx + 1])
+              idx = idx + 2
+            end
+            if ttl ~= nil and ttl > 0 then
+              redis.call('PEXPIRE', KEYS[1], ttl)
+            end
+            return 1
+            """;
+
     private final RedisConnectionProvider connection;
 
     public RedisSingleUseObjectProvider(KeycloakSession session) {
@@ -70,18 +109,11 @@ public class RedisSingleUseObjectProvider implements SingleUseObjectProvider {
         if (key.endsWith(REVOKED_KEY) && notes != null && !notes.isEmpty()) {
             throw new ModelException("Notes are not supported for revoked tokens");
         }
-        String redisKey = redisKey(key);
-        RedisSync sync = connection.sync();
-        sync.del(redisKey);
-        Map<String, String> hash = toHash(notes);
-        if (!hash.isEmpty()) {
-            sync.hset(redisKey, hash);
-        } else {
-            // ensure key exists even with empty notes
-            sync.hset(redisKey, Constants.VERSION_FIELD, "1");
-        }
-        sync.pexpire(redisKey, lifespanSeconds * 1000L);
-        RedisMetrics.record(RedisMetrics.Cache.SINGLE_USE, RedisMetrics.Op.HSET);
+        List<String> args = hashArgs(lifespanSeconds * 1000L, notes);
+        connection
+                .sync()
+                .eval(PUT_SCRIPT, ScriptOutputType.INTEGER, new String[] {redisKey(key)}, args.toArray(new String[0]));
+        RedisMetrics.record(RedisMetrics.Cache.SINGLE_USE, RedisMetrics.Op.EVAL);
     }
 
     @Override
@@ -132,24 +164,17 @@ public class RedisSingleUseObjectProvider implements SingleUseObjectProvider {
         if (key.endsWith(REVOKED_KEY)) {
             throw new ModelException("Revoked tokens can't be replaced");
         }
-        String redisKey = redisKey(key);
-        RedisSync sync = connection.sync();
-        Long exists = sync.exists(redisKey);
-        if (exists == null || exists == 0L) {
-            return false;
-        }
-        Long ttl = sync.pttl(redisKey);
-        sync.del(redisKey);
-        Map<String, String> hash = toHash(notes);
-        if (!hash.isEmpty()) {
-            sync.hset(redisKey, hash);
-        } else {
-            sync.hset(redisKey, Constants.VERSION_FIELD, "1");
-        }
-        if (ttl != null && ttl > 0) {
-            sync.pexpire(redisKey, ttl);
-        }
-        return true;
+        List<String> args = hashArgs(null, notes);
+        Long result =
+                connection
+                        .sync()
+                        .eval(
+                                REPLACE_SCRIPT,
+                                ScriptOutputType.INTEGER,
+                                new String[] {redisKey(key)},
+                                args.toArray(new String[0]));
+        RedisMetrics.record(RedisMetrics.Cache.SINGLE_USE, RedisMetrics.Op.EVAL);
+        return result != null && result == 1L;
     }
 
     @Override
@@ -186,6 +211,27 @@ public class RedisSingleUseObjectProvider implements SingleUseObjectProvider {
 
     private static String redisKey(String logicalKey) {
         return SingleUseObjectKey.of(logicalKey).key();
+    }
+
+    /**
+     * Build Lua ARGV for put/replace: optional leading TTL millis, then n, then field/value pairs.
+     * When {@code ttlMillis} is null, only {@code n} + pairs are emitted (replace script).
+     */
+    private static List<String> hashArgs(Long ttlMillis, Map<String, String> notes) {
+        Map<String, String> hash = toHash(notes);
+        if (hash.isEmpty()) {
+            hash = Map.of(Constants.VERSION_FIELD, "1");
+        }
+        List<String> args = new ArrayList<>();
+        if (ttlMillis != null) {
+            args.add(Long.toString(ttlMillis));
+        }
+        args.add(Integer.toString(hash.size()));
+        for (Map.Entry<String, String> e : hash.entrySet()) {
+            args.add(e.getKey());
+            args.add(e.getValue());
+        }
+        return args;
     }
 
     private static Map<String, String> toHash(Map<String, String> notes) {

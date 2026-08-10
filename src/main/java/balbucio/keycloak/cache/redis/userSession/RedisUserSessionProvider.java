@@ -206,15 +206,12 @@ public class RedisUserSessionProvider implements UserSessionProvider {
     public Map<String, Long> getActiveClientSessionStats(RealmModel realm, boolean offline) {
         Map<String, Long> stats = new HashMap<>();
         Set<String> ids = connection.sync().smembers(UserSessionIndexes.realmIndex(realm.getId(), offline));
-        if (ids == null) {
+        if (ids == null || ids.isEmpty()) {
             return stats;
         }
-        for (String id : ids) {
-            RedisUserSessionAdapter sessionAdapter = getUserSessionById(id, offline);
-            if (sessionAdapter == null) {
-                continue;
-            }
-            for (String clientId : sessionAdapter.getAuthenticatedClientSessions().keySet()) {
+        List<UserSessionKey> keys = ids.stream().map(id -> UserSessionKey.of(id, offline)).toList();
+        for (RedisUserSessionAdapter sessionAdapter : userSessions.getAll(keys).values()) {
+            for (String clientId : sessionAdapter.getMap(Constants.CLIENT_SESSION_PREFIX).keySet()) {
                 stats.merge(clientId, 1L, Long::sum);
             }
         }
@@ -263,17 +260,26 @@ public class RedisUserSessionProvider implements UserSessionProvider {
 
     @Override
     public void removeUserSessions(RealmModel realm) {
-        Set<String> ids = connection.sync().smembers(UserSessionIndexes.realmIndex(realm.getId(), false));
-        if (ids != null) {
-            for (String id : ids) {
-                removeUserSession(id, false);
-            }
+        removeAllFromRealmIndex(realm.getId(), false);
+        removeAllFromRealmIndex(realm.getId(), true);
+    }
+
+    private void removeAllFromRealmIndex(String realmId, boolean offline) {
+        Set<String> ids = connection.sync().smembers(UserSessionIndexes.realmIndex(realmId, offline));
+        if (ids == null || ids.isEmpty()) {
+            return;
         }
-        Set<String> offlineIds = connection.sync().smembers(UserSessionIndexes.realmIndex(realm.getId(), true));
-        if (offlineIds != null) {
-            for (String id : offlineIds) {
-                removeUserSession(id, true);
+        // Pipeline-load sessions so client-session cleanup avoids N+1 GETs before deletes.
+        List<UserSessionKey> keys = ids.stream().map(id -> UserSessionKey.of(id, offline)).toList();
+        Map<UserSessionKey, RedisUserSessionAdapter> loaded = userSessions.getAll(keys);
+        for (String id : ids) {
+            RedisUserSessionAdapter adapter = loaded.get(UserSessionKey.of(id, offline));
+            if (adapter != null) {
+                for (String clientId : Map.copyOf(adapter.getMap(Constants.CLIENT_SESSION_PREFIX)).keySet()) {
+                    removeClientSession(id, clientId, offline);
+                }
             }
+            userSessions.delete(UserSessionKey.of(id, offline));
         }
     }
 
@@ -424,21 +430,22 @@ public class RedisUserSessionProvider implements UserSessionProvider {
         if (compoundIds == null || compoundIds.isEmpty()) {
             return Stream.empty();
         }
-        List<UserSessionModel> sessions = new ArrayList<>();
+        List<UserSessionKey> keys = new ArrayList<>();
         for (String compound : compoundIds) {
             int sep = compound.indexOf("::");
             if (sep <= 0) {
                 continue;
             }
-            String userSessionId = compound.substring(0, sep);
-            RedisUserSessionAdapter adapter = getUserSessionById(userSessionId, offline);
-            if (adapter != null
-                    && (realm == null
-                            || Objects.equals(realm.getId(), adapter.get(RedisUserSessionAdapter.REALM_ID)))) {
-                sessions.add(adapter);
-            }
+            keys.add(UserSessionKey.of(compound.substring(0, sep), offline));
         }
-        return sessions.stream().distinct();
+        Map<UserSessionKey, RedisUserSessionAdapter> loaded = userSessions.getAll(keys);
+        return loaded.values().stream()
+                .filter(
+                        adapter ->
+                                realm == null
+                                        || Objects.equals(
+                                                realm.getId(), adapter.get(RedisUserSessionAdapter.REALM_ID)))
+                .map(UserSessionModel.class::cast);
     }
 
     private Collection<RedisChangelogTransaction.IndexUpdate> userSessionIndexes(RedisUserSessionAdapter adapter) {

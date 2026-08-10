@@ -20,6 +20,7 @@ Prefixo SPI: `KC_SPI_REDIS_CONNECTION_DEFAULT_*`
 | `KC_SPI_REDIS_CONNECTION_DEFAULT_NODES` | `host:port` separados por vírgula | `redis:6379` |
 | `KC_SPI_REDIS_CONNECTION_DEFAULT_MASTER_NAME` | Nome do master (obrigatório em sentinel) | `mymaster` |
 | `KC_SPI_REDIS_CONNECTION_DEFAULT_SSL` | TLS | `false` |
+| `KC_SPI_REDIS_CONNECTION_DEFAULT_SSL_VERIFY_PEER` | Verificar certificado TLS (com SSL) | `true` |
 | `KC_SPI_REDIS_CONNECTION_DEFAULT_USERNAME` | Usuário (opcional) | |
 | `KC_SPI_REDIS_CONNECTION_DEFAULT_PASSWORD` | Senha (opcional) | |
 | `KC_SPI_REDIS_CONNECTION_DEFAULT_TIMEOUT` | Timeout (`2000`, `2s`, `500ms`) | `2000ms` |

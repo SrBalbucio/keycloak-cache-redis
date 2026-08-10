@@ -36,4 +36,18 @@ public final class RedisKeySpace {
         }
         return prefix + relative;
     }
+
+    /**
+     * Build a key with a Redis Cluster hash tag so related keys share a hash slot.
+     *
+     * <p>Example: {@code taggedKey("realm-1", "login-failure:user-2")} →
+     * {@code kc:{realm-1}:login-failure:user-2}.
+     */
+    public static String taggedKey(String slotTag, String relative) {
+        if (slotTag == null || slotTag.isBlank()) {
+            return key(relative);
+        }
+        String tagged = "{" + slotTag + "}:" + (relative == null ? "" : relative);
+        return key(tagged);
+    }
 }

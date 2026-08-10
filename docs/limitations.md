@@ -6,7 +6,8 @@ Comportamentos conhecidos e restrições da implementação atual.
 
 - **Sem migração Infinispan → Redis.** `importUserSessions` / `loadPersistentSessions` são no-ops. Após ativar a extensão, usuários precisam reautenticar.
 - **Sessões offline** vivem no Redis; não há preload a partir do banco como no caminho Infinispan clássico.
-- Em modo Redis **cluster**, índices secundários não usam `MULTI/EXEC` — consistência eventual dos SETs.
+- Em modo Redis **cluster**, se entity e índices caírem em slots diferentes (`CROSSSLOT`), o CAS do hash e os `SADD`/`SREM` dos índices deixam de ser atômicos (fallback best-effort). Login failures usam hash-tag por realm (`{realmId}`) para colocalizar entity + índice.
+- Índices SET recebem TTL alinhado à expiração da entidade e são limpos no expire lazy (leitura) e em deletes; updates aplicam delta de membership (SREM dos membros antigos).
 
 ## Authorization
 

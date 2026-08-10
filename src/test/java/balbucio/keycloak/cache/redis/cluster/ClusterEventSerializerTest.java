@@ -2,7 +2,10 @@ package balbucio.keycloak.cache.redis.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.fasterxml.jackson.databind.exc.InvalidTypeIdException;
 
 import java.lang.reflect.Constructor;
 import java.util.HashMap;
@@ -226,6 +229,15 @@ class ClusterEventSerializerTest {
 
         assertTrue(json.contains("@class"), "expected polymorphic @class marker in: " + json);
         assertTrue(json.contains(ClientAddedEvent.class.getName()), "expected concrete class in: " + json);
+    }
+
+    @Test
+    void rejectsNonAllowlistedEventTypes() {
+        String json =
+                """
+                {"eventKey":"k","events":[{"@class":"java.util.HashMap","a":1}],"ignoreSender":true,"dcNotify":"ALL_DCS","senderId":"n1"}
+                """;
+        assertThrows(InvalidTypeIdException.class, () -> ClusterEventSerializer.deserialize(json));
     }
 
     @Test
