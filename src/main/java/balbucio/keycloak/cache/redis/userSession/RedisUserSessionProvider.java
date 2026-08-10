@@ -477,9 +477,11 @@ public class RedisUserSessionProvider implements UserSessionProvider {
             RealmModel realm, String clientId, boolean offline, Integer firstResult, Integer maxResults) {
         long start = firstResult == null ? 0L : Math.max(0L, firstResult.longValue());
         long stop;
-        if (maxResults == null) {
+        // Keycloak 26.6 contract: negative maxResults means "no limit" (same as null).
+        // Only zero returns an empty stream.
+        if (maxResults == null || maxResults < 0) {
             stop = -1L;
-        } else if (maxResults <= 0) {
+        } else if (maxResults == 0) {
             return Stream.empty();
         } else {
             stop = start + maxResults - 1;

@@ -221,6 +221,43 @@ class RedisUserSessionProviderIntegrationTest extends AbstractRedisIntegrationTe
         assertEquals("ps2", page.get(0));
     }
 
+    /**
+     * Regression: Keycloak 26.6+ admin console calls {@code readOnlyStreamUserSessions}, whose
+     * default delegates to {@code getUserSessionsStream(realm, client, -1, -1)} where negative
+     * values mean "no limit". The provider must treat negative maxResults as "no limit", not
+     * "return empty".
+     */
+    @Test
+    void negativeMaxResultsTreatedAsNoLimit() {
+        KeycloakSession session = TestSessions.newSession(provider());
+        RealmModel realm = session.realms().getRealm(TestSessions.REALM_ID);
+        UserModel user = session.users().getUserById(realm, TestSessions.USER_ID);
+        RedisUserSessionProvider provider = new RedisUserSessionProvider(session, 100, false);
+        ClientModel client = TestSessions.newClient("client-neg");
+        TestSessions.registerClient(realm, client);
+
+        UserSessionModel s1 = provider.createUserSession(
+                "ns1", realm, user, "alice", "ip", "form", false, null, null,
+                SessionPersistenceState.PERSISTENT);
+        UserSessionModel s2 = provider.createUserSession(
+                "ns2", realm, user, "alice", "ip", "form", false, null, null,
+                SessionPersistenceState.PERSISTENT);
+        provider.createClientSession(realm, client, s1);
+        provider.createClientSession(realm, client, s2);
+        session.getTransactionManager().commit();
+
+        // Simulates readOnlyStreamUserSessions(realm, client, -1, -1)
+        var all = provider.getUserSessionsStream(realm, client, -1, -1)
+                .map(UserSessionModel::getId).toList();
+        assertEquals(2, all.size(), "negative maxResults should mean no limit, not empty");
+
+        // maxResults == 0 still returns empty (Keycloak contract)
+        assertTrue(provider.getUserSessionsStream(realm, client, 0, 0).findAny().isEmpty());
+
+        // Explicit limit still works
+        assertEquals(1, provider.getUserSessionsStream(realm, client, 0, 1).count());
+    }
+
     @Test
     void brokerSessionLookupUsesIndex() {
         KeycloakSession session = TestSessions.newSession(provider());
