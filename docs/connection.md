@@ -57,6 +57,19 @@ Configurado via:
 
 O sufixo `:` é aplicado automaticamente quando necessário. Exemplo: `kc` → todas as chaves começam com `kc:`.
 
+## Connection `authz` (opcional)
+
+Segundo factory no SPI `redisConnection` (`id=authz`):
+
+```bash
+KC_SPI_REDIS_CONNECTION_AUTHZ_MODE=standalone
+KC_SPI_REDIS_CONNECTION_AUTHZ_NODES=authz-redis:6379
+KC_SPI_REDIS_CONNECTION_AUTHZ_DATABASE=1
+```
+
+Sessões, single-use, login-failure, auth-session, cluster e public-keys permanecem no `default`.  
+Se `AUTHZ_NODES` não for definido, authz reutiliza o `default`.
+
 ## Segurança e timeouts
 
 - `SSL=true` habilita TLS no cliente Lettuce (use rede confiável ou TLS em produção).

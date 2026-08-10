@@ -16,5 +16,6 @@ Extensão para Keycloak **26.7.1** que substitui caches distribuídos de sessão
 | [Métricas](metrics.md) | Contadores e latência Lettuce |
 | [Limitações](limitations.md) | Restrições conhecidas e comportamento esperado |
 | [Release](release.md) | Pipeline Woodpecker → GitHub Releases |
+| [Entity cache](entity-cache.md) | MVP de índices user/realm/client no Redis |
 
 Para um resumo operacional rápido, veja também o [README](../README.md) na raiz do repositório.

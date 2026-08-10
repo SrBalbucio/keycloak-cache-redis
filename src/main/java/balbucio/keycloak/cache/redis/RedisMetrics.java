@@ -42,6 +42,8 @@ public final class RedisMetrics {
         public static final String CLUSTER = "cluster";
         public static final String AUTHZ = "authz";
         public static final String AUTHZ_GEN = "authzGen";
+        public static final String PUBLIC_KEYS = "publicKeys";
+        public static final String ENTITY = "entity";
         public static final String GENERIC = "generic";
 
         private Cache() {}

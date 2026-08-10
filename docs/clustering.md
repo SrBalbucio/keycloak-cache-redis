@@ -24,7 +24,7 @@ Serializa eventos de invalidação do Keycloak (realm, user, client, role, group
 
 ### Public keys
 
-`MapPublicKeyStorageProvider` mantém chaves públicas em memória **por processo** (`ConcurrentHashMap`), não no Redis. Cada nó tem seu próprio cache; invalidação cross-node usa o fluxo do ClusterProvider quando aplicável.
+`RedisPublicKeyStorageProvider` usa Redis L2 + L1 local. Invalidação cross-node no canal `public-keys:invalidation`. Fail-open para o `PublicKeyLoader` se Redis falhar.
 
 ## Topologias Redis × clustering Keycloak
 
@@ -56,4 +56,4 @@ Validar login em um nó e continuidade da sessão no outro, além de mudanças d
 | `ClusterEventSerializer` | Serialização Jackson dos eventos |
 | `events/*Mixin` | Mixins por tipo de evento |
 | `DisabledStickySessionEncoderProvider` | Desliga sticky |
-| `MapPublicKeyStorageProvider` | Public keys em JVM |
+| `RedisPublicKeyStorageProvider` | Public keys Redis L2 + L1 |

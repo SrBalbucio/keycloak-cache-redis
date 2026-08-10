@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `RedisPublicKeyStorageProvider`: Redis L2 + L1 + PUBSUB invalidation for public keys (SPI id `infinispan`).
+- Separate `redisConnection` factory `id=authz` (`KC_SPI_REDIS_CONNECTION_AUTHZ_*`) with fallback to `default`.
+- Durable revoked tokens: write-through to `RevokedTokenPersisterProvider` + preload on `PostMigrationEvent` (`persistRevokedTokens`, default true).
+- Entity cache MVP (`KC_CACHE_REDIS_ENTITY_ENABLED`, default false): Redis L2 indexes for user/realm/client hot paths + L1 + invalidation (`docs/entity-cache.md`).
 - Woodpecker CI (`.woodpecker/ci.yml`) and release deploy (`.woodpecker/release.yml` → GitHub Releases on `v*` tags).
 - GitHub Actions CI (`mvn verify` with Testcontainers Redis).
 - Apache License 2.0 and Maven Wrapper.

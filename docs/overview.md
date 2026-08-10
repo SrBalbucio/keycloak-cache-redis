@@ -31,9 +31,12 @@ A extensão só entra em vigor quando o feature flag está ligado e o Keycloak r
 | Single-use objects | Implementado | Action tokens / revoked keys |
 | ClusterProvider (PUBSUB) | Implementado | Invalidação entre nós no mesmo Redis |
 | Sticky session desabilitada | Implementado | Sessões compartilhadas no Redis |
-| Public key storage local | Implementado | `ConcurrentHashMap` por processo |
+| Public key storage Redis | Implementado | L2 Redis + L1 + PUBSUB |
 | Authorization cache-aside | Implementado | 5 stores + invalidação por geração |
 | LRU local de authz | Implementado (opcional) | Desligado por padrão |
+| Redis connection `authz` | Implementado (opcional) | Fallback para `default` |
+| Revoked tokens duráveis | Implementado | Redis + JPA persist/preload |
+| Entity cache MVP | Implementado (flag off) | Índices username/email/realm/clientId |
 | Conexão standalone / sentinel / cluster | Implementado | SPI `redisConnection` |
 | Métricas Micrometer | Implementado | Latência Lettuce + contadores |
 

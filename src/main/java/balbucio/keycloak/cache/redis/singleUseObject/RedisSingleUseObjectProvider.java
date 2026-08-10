@@ -11,20 +11,24 @@ import balbucio.keycloak.cache.redis.RedisMetrics;
 import balbucio.keycloak.cache.redis.common.Constants;
 import balbucio.keycloak.cache.redis.connection.RedisConnectionProvider;
 import io.lettuce.core.ScriptOutputType;
+import org.jboss.logging.Logger;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.ModelException;
 import org.keycloak.models.SingleUseObjectProvider;
+import org.keycloak.models.session.RevokedTokenPersisterProvider;
 
 /**
  * Immediate Redis-backed single-use store. {@link #remove} is atomic (GET+DEL via Lua).
+ *
+ * <p>When {@code persistRevokedTokens} is enabled, revoked keys are also written through to
+ * {@link RevokedTokenPersisterProvider} (JPA) for durability across Redis flushes.
  */
 public class RedisSingleUseObjectProvider implements SingleUseObjectProvider {
 
+    private static final Logger LOG = Logger.getLogger(RedisSingleUseObjectProvider.class);
+
     private static final String NOTES_PREFIX = "n.";
 
-    /**
-     * Atomically returns all hash fields and deletes the key. Returns flat field/value list or empty.
-     */
     private static final String REMOVE_SCRIPT =
             """
             local exists = redis.call('EXISTS', KEYS[1])
@@ -54,7 +58,6 @@ public class RedisSingleUseObjectProvider implements SingleUseObjectProvider {
             return 1
             """;
 
-    /** Replace key contents and set TTL in one round-trip (DEL+HSET+PEXPIRE). */
     private static final String PUT_SCRIPT =
             """
             redis.call('DEL', KEYS[1])
@@ -71,10 +74,6 @@ public class RedisSingleUseObjectProvider implements SingleUseObjectProvider {
             return 1
             """;
 
-    /**
-     * Atomically replace notes while preserving remaining TTL. Returns 0 if key missing, 1 on
-     * success.
-     */
     private static final String REPLACE_SCRIPT =
             """
             if redis.call('EXISTS', KEYS[1]) == 0 then
@@ -94,10 +93,18 @@ public class RedisSingleUseObjectProvider implements SingleUseObjectProvider {
             return 1
             """;
 
+    private final KeycloakSession session;
     private final RedisConnectionProvider connection;
+    private final boolean persistRevokedTokens;
 
     public RedisSingleUseObjectProvider(KeycloakSession session) {
+        this(session, true);
+    }
+
+    public RedisSingleUseObjectProvider(KeycloakSession session, boolean persistRevokedTokens) {
+        this.session = session;
         this.connection = session.getProvider(RedisConnectionProvider.class);
+        this.persistRevokedTokens = persistRevokedTokens;
     }
 
     @Override
@@ -109,17 +116,23 @@ public class RedisSingleUseObjectProvider implements SingleUseObjectProvider {
         if (key.endsWith(REVOKED_KEY) && notes != null && !notes.isEmpty()) {
             throw new ModelException("Notes are not supported for revoked tokens");
         }
-        List<String> args = hashArgs(lifespanSeconds * 1000L, notes);
-        connection
-                .sync()
-                .eval(PUT_SCRIPT, ScriptOutputType.INTEGER, new String[] {redisKey(key)}, args.toArray(new String[0]));
-        RedisMetrics.record(RedisMetrics.Cache.SINGLE_USE, RedisMetrics.Op.EVAL);
+        putRedis(key, lifespanSeconds, notes);
+        if (persistRevokedTokens && key.endsWith(REVOKED_KEY)) {
+            persistRevoked(key, lifespanSeconds);
+        }
+    }
+
+    /**
+     * Redis-only put used by factory preload (avoids writing back to JPA).
+     */
+    void putRedisOnly(String key, long lifespanSeconds, Map<String, String> notes) {
+        putRedis(key, lifespanSeconds, notes);
     }
 
     @Override
     public Map<String, String> get(String key) {
         Objects.requireNonNull(key);
-        if (key.endsWith(REVOKED_KEY)) {
+        if (persistRevokedTokens && key.endsWith(REVOKED_KEY)) {
             throw new ModelException("Revoked tokens can't be retrieved");
         }
         Map<String, String> hash = connection.sync().hgetall(redisKey(key));
@@ -133,7 +146,7 @@ public class RedisSingleUseObjectProvider implements SingleUseObjectProvider {
     @SuppressWarnings("unchecked")
     public Map<String, String> remove(String key) {
         Objects.requireNonNull(key);
-        if (key.endsWith(REVOKED_KEY)) {
+        if (persistRevokedTokens && key.endsWith(REVOKED_KEY)) {
             throw new ModelException("Revoked tokens can't be removed");
         }
         Object raw =
@@ -161,7 +174,7 @@ public class RedisSingleUseObjectProvider implements SingleUseObjectProvider {
     @Override
     public boolean replace(String key, Map<String, String> notes) {
         Objects.requireNonNull(key);
-        if (key.endsWith(REVOKED_KEY)) {
+        if (persistRevokedTokens && key.endsWith(REVOKED_KEY)) {
             throw new ModelException("Revoked tokens can't be replaced");
         }
         List<String> args = hashArgs(null, notes);
@@ -196,7 +209,11 @@ public class RedisSingleUseObjectProvider implements SingleUseObjectProvider {
                                 ScriptOutputType.INTEGER,
                                 new String[] {redisKey(key)},
                                 args.toArray(new String[0]));
-        return result != null && result == 1L;
+        boolean created = result != null && result == 1L;
+        if (persistRevokedTokens && key.endsWith(REVOKED_KEY)) {
+            persistRevoked(key, lifespanInSeconds);
+        }
+        return created;
     }
 
     @Override
@@ -209,14 +226,34 @@ public class RedisSingleUseObjectProvider implements SingleUseObjectProvider {
     @Override
     public void close() {}
 
+    private void putRedis(String key, long lifespanSeconds, Map<String, String> notes) {
+        List<String> args = hashArgs(lifespanSeconds * 1000L, notes);
+        connection
+                .sync()
+                .eval(PUT_SCRIPT, ScriptOutputType.INTEGER, new String[] {redisKey(key)}, args.toArray(new String[0]));
+        RedisMetrics.record(RedisMetrics.Cache.SINGLE_USE, RedisMetrics.Op.EVAL);
+    }
+
+    private void persistRevoked(String key, long lifespanSeconds) {
+        try {
+            RevokedTokenPersisterProvider persister =
+                    session.getProvider(RevokedTokenPersisterProvider.class);
+            if (persister == null) {
+                LOG.debug("RevokedTokenPersisterProvider unavailable — revoked token only in Redis");
+                return;
+            }
+            String tokenId = key.substring(0, key.length() - REVOKED_KEY.length());
+            persister.revokeToken(tokenId, lifespanSeconds);
+        } catch (RuntimeException e) {
+            LOG.warnf(e, "Failed to persist revoked token %s to JPA", key);
+            throw e;
+        }
+    }
+
     private static String redisKey(String logicalKey) {
         return SingleUseObjectKey.of(logicalKey).key();
     }
 
-    /**
-     * Build Lua ARGV for put/replace: optional leading TTL millis, then n, then field/value pairs.
-     * When {@code ttlMillis} is null, only {@code n} + pairs are emitted (replace script).
-     */
     private static List<String> hashArgs(Long ttlMillis, Map<String, String> notes) {
         Map<String, String> hash = toHash(notes);
         if (hash.isEmpty()) {

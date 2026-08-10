@@ -30,7 +30,31 @@ Prefixo SPI: `KC_SPI_REDIS_CONNECTION_DEFAULT_*`
 
 Com prefixo `kc`, as chaves ficam como `kc:user-session:<id>`, `kc:auth-session:<id>`, `kc:cluster:events`, `kc:authz:...`, etc.
 
-Detalhes dos modos: [Conexão Redis](connection.md).
+### Conexão Redis separada (Authorization)
+
+Opcional: `KC_SPI_REDIS_CONNECTION_AUTHZ_*` (mesmas chaves: `MODE`, `NODES`, `DATABASE`, …).  
+Se `NODES` estiver vazio, authz usa o connection `default`.
+
+### Public keys
+
+| Variável | Descrição | Default |
+|----------|-----------|---------|
+| `KC_SPI_PUBLIC_KEY_STORAGE_INFINISPAN_TTL_SECONDS` | TTL das chaves públicas no Redis | `3600` |
+
+### Single-use / revoked
+
+| Variável | Descrição | Default |
+|----------|-----------|---------|
+| `KC_SPI_SINGLE_USE_OBJECT_INFINISPAN_PERSIST_REVOKED_TOKENS` | Write-through JPA + preload no boot | `true` |
+
+### Entity cache MVP
+
+| Variável | Descrição | Default |
+|----------|-----------|---------|
+| `KC_CACHE_REDIS_ENTITY_ENABLED` | Liga UserCache/CacheRealm Redis (índices) | `false` |
+| `KC_CACHE_REDIS_ENTITY_TTL_SECONDS` | TTL dos índices | `1800` |
+
+Detalhes dos modos: [Conexão Redis](connection.md). Entity cache: [entity-cache.md](entity-cache.md).
 
 ## Authentication sessions
 

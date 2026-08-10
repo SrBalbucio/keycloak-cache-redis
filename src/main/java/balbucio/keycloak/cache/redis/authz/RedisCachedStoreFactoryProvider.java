@@ -10,6 +10,7 @@ import balbucio.keycloak.cache.redis.authz.resource.RedisCachedResourceStore;
 import balbucio.keycloak.cache.redis.authz.resourceServer.RedisCachedResourceServerStore;
 import balbucio.keycloak.cache.redis.authz.scope.RedisCachedScopeStore;
 import balbucio.keycloak.cache.redis.connection.RedisConnectionProvider;
+import balbucio.keycloak.cache.redis.connection.RedisConnections;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.cache.authorization.CachedStoreFactoryProvider;
 import org.keycloak.authorization.store.PermissionTicketStore;
@@ -68,7 +69,7 @@ public class RedisCachedStoreFactoryProvider implements CachedStoreFactoryProvid
             return null;
         }
         if (cache == null) {
-            RedisConnectionProvider connection = session.getProvider(RedisConnectionProvider.class);
+            RedisConnectionProvider connection = RedisConnections.forAuthz(session);
             if (config.isLruEnabled() && sharedLocalLru != null) {
                 cache = new LocalAuthorizationCache(connection, objectMapper, config, sharedLocalLru);
             } else {

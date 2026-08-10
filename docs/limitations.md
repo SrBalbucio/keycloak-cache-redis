@@ -17,14 +17,18 @@ Comportamentos conhecidos e restrições da implementação atual.
 
 ## Clustering
 
-- Coordenação multi-nó exige o **mesmo Redis lógico** (standalone, sentinel ou cluster Redis).
-- **Public key storage** é local ao processo, não compartilhado no Redis.
+- Coordenação multi-nó (sessões / cluster / public-keys) exige o **mesmo Redis lógico** no connection `default`.
+- Public keys usam Redis L2 + L1 local com PUBSUB `public-keys:invalidation`.
 - Sticky session é desnecessária e está desabilitada pelo shim da extensão.
+
+## Entity cache MVP
+
+- Desligado por padrão (`KC_CACHE_REDIS_ENTITY_ENABLED`). Quando ligado, só indexa lookups quentes (username/email/realm name/clientId); não há parity com o grafo Infinispan de roles/groups.
+- Detalhes: [entity-cache.md](entity-cache.md).
 
 ## Fora do escopo atual
 
 - Multi-region active-active (replicação cross-DC, resolução de conflitos, failover geográfico).
-- Redis separado para authz vs sessões (ambos usam o mesmo `RedisConnectionProvider`).
 - Migração assistida de sessões existentes.
 
 ## Requisitos operacionais

@@ -9,6 +9,7 @@ import balbucio.keycloak.cache.redis.authz.cache.LocalAuthorizationCache;
 import balbucio.keycloak.cache.redis.common.Constants;
 import balbucio.keycloak.cache.redis.common.IsSupported;
 import balbucio.keycloak.cache.redis.connection.RedisConnectionProvider;
+import balbucio.keycloak.cache.redis.connection.RedisConnections;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import org.jboss.logging.Logger;
@@ -61,7 +62,7 @@ public class RedisCachedStoreProviderFactory implements CachedStoreProviderFacto
             return;
         }
         try {
-            RedisConnectionProvider redis = session.getProvider(RedisConnectionProvider.class);
+            RedisConnectionProvider redis = RedisConnections.forAuthz(session);
             if (redis == null) {
                 LOG.warn("RedisConnectionProvider unavailable — authz local LRU will not receive cross-node invalidation");
                 pubsubInitialized = true;
