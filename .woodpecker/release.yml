@@ -97,7 +97,7 @@ steps:
     image: woodpeckerci/plugin-release:2.1.1
     settings:
       api-key:
-        from_secret: github_token
+        from_secret: github_access_token
       files:
         # Installable Keycloak provider (shaded). Thin jar is not published.
         - target/keycloak-cache-redis-*-withdeps.jar
