@@ -1,5 +1,6 @@
 package balbucio.keycloak.cache.redis.connection;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -31,13 +32,28 @@ public interface RedisSync {
 
     Long incr(String key);
 
+    Long incrby(String key, long amount);
+
     Long sadd(String key, String... members);
 
     Long srem(String key, String... members);
 
     Set<String> smembers(String key);
 
+    Long scard(String key);
+
+    Long zadd(String key, double score, String member);
+
+    Long zrem(String key, String... members);
+
+    List<String> zrevrange(String key, long start, long stop);
+
+    Long zcard(String key);
+
     String get(String key);
+
+    /** Values in key order; missing keys yield {@code null} entries. */
+    List<String> mget(String... keys);
 
     String set(String key, String value);
 

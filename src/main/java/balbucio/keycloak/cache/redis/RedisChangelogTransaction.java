@@ -174,7 +174,7 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
             List<RedisHashCas.IndexOp> removals = new ArrayList<>();
             for (IndexUpdate index : e.getValue().indexRemovals()) {
                 if (index.member() != null) {
-                    removals.add(RedisHashCas.IndexOp.remove(index.indexKey(), index.member()));
+                    removals.add(toRemoveOp(index));
                 }
             }
             RedisHashCas.deleteWithIndexes(connection, e.getKey().key(), removals);
@@ -215,18 +215,18 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
             List<RedisHashCas.IndexOp> removes = new ArrayList<>();
             for (IndexUpdate idx : next) {
                 if (idx.member() != null && !previous.contains(idx)) {
-                    adds.add(RedisHashCas.IndexOp.add(idx.indexKey(), idx.member()));
+                    adds.add(toAddOp(idx));
                 }
             }
             for (IndexUpdate idx : previous) {
                 if (idx.member() != null && !next.contains(idx)) {
-                    removes.add(RedisHashCas.IndexOp.remove(idx.indexKey(), idx.member()));
+                    removes.add(toRemoveOp(idx));
                 }
             }
             // Always refresh TTL / ensure membership for current indexes on successful write
             for (IndexUpdate idx : next) {
                 if (idx.member() != null && previous.contains(idx)) {
-                    adds.add(RedisHashCas.IndexOp.add(idx.indexKey(), idx.member()));
+                    adds.add(toAddOp(idx));
                 }
             }
 
@@ -256,6 +256,10 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
                 throw new IllegalStateException("Redis CAS returned invalid code " + result + " for " + key.key());
             }
 
+            if (attempts < Constants.CAS_MAX_RETRIES) {
+                RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.CAS_RETRY);
+            }
+
             Map<String, String> fresh = connection.sync().hgetall(key.key());
             if (fresh == null || fresh.isEmpty()) {
                 entity.rebase(null);
@@ -265,6 +269,7 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
                 rememberLoadedIndexes(key, entity);
             }
         }
+        RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.CAS_FAIL);
         throw new IllegalStateException(
                 "Failed to commit entity after " + Constants.CAS_MAX_RETRIES + " CAS retries: " + key.key());
     }
@@ -274,7 +279,7 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
         List<RedisHashCas.IndexOp> removals = new ArrayList<>();
         for (IndexUpdate index : indexFunction.apply(adapter)) {
             if (index.member() != null) {
-                removals.add(RedisHashCas.IndexOp.remove(index.indexKey(), index.member()));
+                removals.add(toRemoveOp(index));
             }
         }
         RedisHashCas.deleteWithIndexes(connection, key.key(), removals);
@@ -286,6 +291,20 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
         loadedIndexes.put(key, Set.copyOf(indexFunction.apply(adapter)));
     }
 
+    private static RedisHashCas.IndexOp toAddOp(IndexUpdate idx) {
+        if (idx.score() != null) {
+            return RedisHashCas.IndexOp.zadd(idx.indexKey(), idx.member(), idx.score());
+        }
+        return RedisHashCas.IndexOp.add(idx.indexKey(), idx.member());
+    }
+
+    private static RedisHashCas.IndexOp toRemoveOp(IndexUpdate idx) {
+        if (idx.score() != null) {
+            return RedisHashCas.IndexOp.zrem(idx.indexKey(), idx.member());
+        }
+        return RedisHashCas.IndexOp.remove(idx.indexKey(), idx.member());
+    }
+
     @Override
     protected void rollbackImpl() {
         cache.clear();
@@ -293,7 +312,19 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
         loadedIndexes.clear();
     }
 
-    public record IndexUpdate(String indexKey, String member) {}
+    /**
+     * Index membership. When {@code score} is non-null, the index is a ZSET (member scored by
+     * lastSessionRefresh); otherwise a SET.
+     */
+    public record IndexUpdate(String indexKey, String member, Double score) {
+        public IndexUpdate(String indexKey, String member) {
+            this(indexKey, member, null);
+        }
+
+        public static IndexUpdate zset(String indexKey, String member, double score) {
+            return new IndexUpdate(indexKey, member, score);
+        }
+    }
 
     private record PendingDelete<K, A>(A entity, List<IndexUpdate> indexRemovals) {}
 }

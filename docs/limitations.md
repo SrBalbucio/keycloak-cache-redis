@@ -5,8 +5,8 @@ Comportamentos conhecidos e restrições da implementação atual.
 ## Sessões
 
 - **Sem migração Infinispan → Redis.** `importUserSessions` / `loadPersistentSessions` são no-ops. Após ativar a extensão, usuários precisam reautenticar.
-- **Sessões offline** vivem no Redis; não há preload a partir do banco como no caminho Infinispan clássico.
-- Em modo Redis **cluster**, se entity e índices caírem em slots diferentes (`CROSSSLOT`), o CAS do hash e os `SADD`/`SREM` dos índices deixam de ser atômicos (fallback best-effort). Login failures usam hash-tag por realm (`{realmId}`) para colocalizar entity + índice.
+- **Sessões offline** vivem no Redis por padrão. Com `persistOfflineSessions=true`, há write-through JPA + preload no boot.
+- User/auth sessions e login-failure usam hash-tag `{realmId}` para colocalizar entity + índices no Redis Cluster. Em slots divergentes ainda há fallback best-effort (`CROSSSLOT`).
 - Índices SET recebem TTL alinhado à expiração da entidade e são limpos no expire lazy (leitura) e em deletes; updates aplicam delta de membership (SREM dos membros antigos).
 
 ## Authorization
@@ -19,6 +19,7 @@ Comportamentos conhecidos e restrições da implementação atual.
 
 - Coordenação multi-nó (sessões / cluster / public-keys) exige o **mesmo Redis lógico** no connection `default`.
 - Public keys usam Redis L2 + L1 local com PUBSUB `public-keys:invalidation`.
+- Locks async (`executeIfNotExecutedAsync`) completam via PUBSUB `cluster:task-finished`. Se o holder morrer sem unlock, waiters podem timeout quando o TTL do lock expira sem publish.
 - Sticky session é desnecessária e está desabilitada pelo shim da extensão.
 
 ## Entity cache MVP

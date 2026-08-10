@@ -180,6 +180,7 @@ public final class RedisHashCas {
               local member = ARGV[idx + 2]
               idx = idx + 3
               local indexKey = KEYS[keyIndex]
+              -- op: 1=SADD, 0=SREM, 2=ZADD(+score), 3=ZREM
               if op == 1 then
                 redis.call('SADD', indexKey, member)
                 if expireAt ~= nil and expireAt > 0 then
@@ -190,14 +191,28 @@ public final class RedisHashCas {
                     redis.call('PEXPIREAT', indexKey, expireAt)
                   end
                 end
-              else
+              elseif op == 0 then
                 redis.call('SREM', indexKey, member)
+              elseif op == 2 then
+                local score = tonumber(ARGV[idx])
+                idx = idx + 1
+                redis.call('ZADD', indexKey, score, member)
+                if expireAt ~= nil and expireAt > 0 then
+                  local ttl = redis.call('PTTL', indexKey)
+                  local now = tonumber(redis.call('TIME')[1]) * 1000
+                  local desired = expireAt - now
+                  if ttl < 0 or (desired > 0 and ttl < desired) then
+                    redis.call('PEXPIREAT', indexKey, expireAt)
+                  end
+                end
+              elseif op == 3 then
+                redis.call('ZREM', indexKey, member)
               end
             end
             return 1
             """;
 
-    /** Delete entity hash and remove members from index keys atomically. */
+    /** Delete entity hash and remove members from SET/ZSET index keys atomically. */
     public static final String SCRIPT_DELETE_WITH_INDEXES =
             """
             local key = KEYS[1]
@@ -207,8 +222,13 @@ public final class RedisHashCas {
             for i = 1, nIdx do
               local keyIndex = tonumber(ARGV[idx])
               local member = ARGV[idx + 1]
-              idx = idx + 2
-              redis.call('SREM', KEYS[keyIndex], member)
+              local kind = tonumber(ARGV[idx + 2])
+              idx = idx + 3
+              if kind == 3 then
+                redis.call('ZREM', KEYS[keyIndex], member)
+              else
+                redis.call('SREM', KEYS[keyIndex], member)
+              end
             end
             return 1
             """;
@@ -311,9 +331,12 @@ public final class RedisHashCas {
                 keys.add(k);
                 return keys.size();
             });
-            args.add(op.add() ? "1" : "0");
+            args.add(Integer.toString(op.kind().code()));
             args.add(Integer.toString(ki));
             args.add(op.member());
+            if (op.kind() == IndexOp.Kind.ZADD) {
+                args.add(Double.toString(op.score() == null ? 0d : op.score()));
+            }
         }
 
         RedisSync sync = connection.sync();
@@ -362,6 +385,7 @@ public final class RedisHashCas {
             });
             args.add(Integer.toString(ki));
             args.add(op.member());
+            args.add(Integer.toString(op.kind() == IndexOp.Kind.ZREM ? 3 : 0));
         }
 
         RedisSync sync = connection.sync();
@@ -433,13 +457,24 @@ public final class RedisHashCas {
     private static void applyIndexesBestEffort(
             RedisSync sync, long expireAtMillis, Collection<IndexOp> removes, Collection<IndexOp> adds) {
         for (IndexOp op : removes) {
-            if (op.member() != null) {
+            if (op.member() == null) {
+                continue;
+            }
+            if (op.kind() == IndexOp.Kind.ZREM || op.kind() == IndexOp.Kind.ZADD) {
+                sync.zrem(op.indexKey(), op.member());
+            } else {
                 sync.srem(op.indexKey(), op.member());
                 RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.SREM);
             }
         }
         for (IndexOp op : adds) {
-            if (op.member() != null) {
+            if (op.member() == null) {
+                continue;
+            }
+            if (op.kind() == IndexOp.Kind.ZADD) {
+                sync.zadd(op.indexKey(), op.score() == null ? 0d : op.score(), op.member());
+                refreshIndexTtl(sync, op.indexKey(), expireAtMillis);
+            } else {
                 sync.sadd(op.indexKey(), op.member());
                 RedisMetrics.record(RedisMetrics.Cache.GENERIC, RedisMetrics.Op.SADD);
                 refreshIndexTtl(sync, op.indexKey(), expireAtMillis);
@@ -468,13 +503,43 @@ public final class RedisHashCas {
     }
 
     /** Index membership mutation applied with CAS or delete. */
-    public record IndexOp(String indexKey, String member, boolean add) {
+    public record IndexOp(String indexKey, String member, Kind kind, Double score) {
+        public enum Kind {
+            SREM(0),
+            SADD(1),
+            ZADD(2),
+            ZREM(3);
+
+            private final int code;
+
+            Kind(int code) {
+                this.code = code;
+            }
+
+            int code() {
+                return code;
+            }
+        }
+
         public static IndexOp add(String indexKey, String member) {
-            return new IndexOp(indexKey, member, true);
+            return new IndexOp(indexKey, member, Kind.SADD, null);
         }
 
         public static IndexOp remove(String indexKey, String member) {
-            return new IndexOp(indexKey, member, false);
+            return new IndexOp(indexKey, member, Kind.SREM, null);
+        }
+
+        public static IndexOp zadd(String indexKey, String member, double score) {
+            return new IndexOp(indexKey, member, Kind.ZADD, score);
+        }
+
+        public static IndexOp zrem(String indexKey, String member) {
+            return new IndexOp(indexKey, member, Kind.ZREM, null);
+        }
+
+        /** @deprecated use {@link #kind()} */
+        public boolean add() {
+            return kind == Kind.SADD || kind == Kind.ZADD;
         }
     }
 

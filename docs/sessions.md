@@ -8,25 +8,35 @@ Provider: `RedisUserSessionProvider`
 
 - Sessões de usuário **online** e **offline**
 - Client sessions autenticadas ligadas à user session
-- Índices SET: user, realm, client, broker session/user, corresponding session
+- Índices SET (membership) + ZSET por `lastSessionRefresh` (paginação admin)
+- Contadores Redis para `getActiveClientSessionStats`
 
-### Chaves
+### Chaves (hash-tag `{realmId}`)
 
 | Tipo | Padrão |
 |------|--------|
-| User session | `user-session:<id>` / `user-session-offline:<id>` |
-| Client session | `authenticated-client:<compound>` / `authenticated-client-offline:<compound>` |
-| Índices | `user-session*:user-index:…`, `realm-index:…`, `client-index:…`, etc. |
+| User session | `{realmId}:user-session:<id>` / `{realmId}:user-session-offline:<id>` |
+| Client session | `{realmId}:authenticated-client:<compound>` / offline twin |
+| SET indexes | `{realmId}:user-session:realm-index`, `user-index:…`, `client-index:…`, broker/corresponding |
+| ZSET indexes | `{realmId}:user-session:realm-z`, `{realmId}:user-session:client-z:<clientId>` |
+| Stats | `{realmId}:user-session:client-stats:<clientId>` + `client-stats-index` |
+
+Breaking: layout anterior sem hash-tag não é lido. Flush Redis (ou reauth) após upgrade.
 
 ### Persistência
 
 - Entidade: Redis HASH com `version` e dirty-tracking (`MapEntity`)
-- Commit: Lua CAS (`RedisHashCas`) via `RedisChangelogTransaction`
-- Offline: vive no Redis (não há preload do banco)
+- Commit: Lua CAS (`RedisHashCas`) + SADD/SREM/ZADD/ZREM via `RedisChangelogTransaction`
+- Offline: Redis por padrão. Com SPI `persistOfflineSessions=true` (`KC_SPI_USER_SESSIONS_INFINISPAN_PERSIST_OFFLINE_SESSIONS`), write-through para `UserSessionPersisterProvider` e preload em `loadPersistentSessions` (marker `user-session:offline:loaded`).
+
+### Admin / stats
+
+- Paginação `getUserSessionsStream(realm, client, first, max)` usa `ZREVRANGE` no client ZSET (mais recente primeiro).
+- `getActiveClientSessionStats` lê contadores (não hidrata todas as sessões).
 
 ### Migração
 
-`importUserSessions` / `loadPersistentSessions` são **no-ops**. Não há migração Infinispan → Redis: após o switchover, os usuários reautenticam.
+`importUserSessions` continua no-op (sem migração Infinispan → Redis). Offline JPA preload só com `persistOfflineSessions`.
 
 ## Authentication sessions
 
@@ -38,8 +48,8 @@ Provider: `RedisAuthenticationSessionProvider`
 
 | Tipo | Padrão |
 |------|--------|
-| Auth session | `auth-session:<id>` |
-| Índice | `auth-session:realm-index:<realmId>` |
+| Auth session | `{realmId}:auth-session:<id>` |
+| Índice | `{realmId}:auth-session:realm-index` |
 
 ## Login failures
 
@@ -74,18 +84,6 @@ Provider: `RedisSingleUseObjectProvider`
 Mutação no adapter
     → MapEntity marca campos dirty
     → RedisChangelogTransaction enlista na TX Keycloak
-    → commit: Lua CAS no HASH + atualização de índices SET
+    → commit: Lua CAS no HASH + índices SET/ZSET
     → retry em conflito de versão
 ```
-
-## Classes principais
-
-| Classe | Papel |
-|--------|-------|
-| `MapEntity` | Entidade HASH com versionamento |
-| `RedisChangelogTransaction` | Unit-of-work + índices + CAS |
-| `RedisHashCas` | Script Lua de concorrência otimista |
-| `RedisUserSessionProvider` (+ adapters/keys/indexes) | User/client sessions |
-| `RedisAuthenticationSessionProvider` | Auth sessions |
-| `RedisUserLoginFailureProvider` | Login failures |
-| `RedisSingleUseObjectProvider` | Single-use |

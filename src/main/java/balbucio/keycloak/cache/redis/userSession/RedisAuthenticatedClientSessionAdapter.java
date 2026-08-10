@@ -83,7 +83,7 @@ public class RedisAuthenticatedClientSessionAdapter extends MapEntity implements
         if (userSession instanceof RedisUserSessionAdapter adapter) {
             adapter.removeMapEntry(Constants.CLIENT_SESSION_PREFIX, key.clientId());
         }
-        provider.removeClientSession(key.userSessionId(), key.clientId(), key.offline());
+        provider.removeClientSession(key.realmId(), key.userSessionId(), key.clientId(), key.offline());
         this.userSession = null;
     }
 
@@ -91,7 +91,7 @@ public class RedisAuthenticatedClientSessionAdapter extends MapEntity implements
     public UserSessionModel getUserSession() {
         check();
         if (userSession == null) {
-            userSession = provider.getUserSessionById(key.userSessionId(), key.offline());
+            userSession = provider.getUserSessionById(key.realmId(), key.userSessionId(), key.offline());
         }
         return userSession;
     }

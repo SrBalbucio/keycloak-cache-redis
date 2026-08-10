@@ -58,16 +58,21 @@ public class RedisAuthorizationCache {
             String json = connection.sync().get(key);
             RedisMetrics.record(RedisMetrics.Cache.AUTHZ, RedisMetrics.Op.GET);
             if (json == null || json.isEmpty()) {
+                RedisMetrics.record(RedisMetrics.Cache.AUTHZ, RedisMetrics.Op.MISS);
                 return null;
             }
             CachedEntityEnvelope envelope = objectMapper.readValue(json, CachedEntityEnvelope.class);
             if (envelope.getGen() < currentGen) {
                 LOG.tracef("Stale cache entry for %s (entry gen=%d < current=%d)", key, envelope.getGen(), currentGen);
+                RedisMetrics.record(RedisMetrics.Cache.AUTHZ, RedisMetrics.Op.MISS);
                 return null;
             }
-            return objectMapper.treeToValue(envelope.getPayload(), type);
+            T value = objectMapper.treeToValue(envelope.getPayload(), type);
+            RedisMetrics.record(RedisMetrics.Cache.AUTHZ, RedisMetrics.Op.HIT);
+            return value;
         } catch (Exception e) {
             LOG.debugf(e, "Cache get failed for %s, treating as miss", key);
+            RedisMetrics.record(RedisMetrics.Cache.AUTHZ, RedisMetrics.Op.ERROR);
             return null;
         }
     }

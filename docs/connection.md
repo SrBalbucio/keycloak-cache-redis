@@ -41,7 +41,7 @@ Lista de seed nodes em `NODES`. Em Redis Cluster:
 
 - o índice de database é forçado a `0`;
 - `MULTI/EXEC` genérico é desativado;
-- commits usam Lua CAS + índices quando as chaves compartilham slot (ex.: login-failure com hash-tag `{realmId}`); caso contrário há fallback best-effort (`CROSSSLOT`).
+- commits usam Lua CAS + índices SET/ZSET quando as chaves compartilham slot (user/auth sessions e login-failure com hash-tag `{realmId}`); caso contrário há fallback best-effort (`CROSSSLOT`).
 
 ```bash
 KC_SPI_REDIS_CONNECTION_DEFAULT_MODE=cluster

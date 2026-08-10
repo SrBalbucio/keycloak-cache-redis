@@ -28,7 +28,7 @@ class RedisAuthenticationSessionProviderIntegrationTest extends AbstractRedisInt
         session.getTransactionManager().commit();
 
         RedisConnectionProvider conn = provider();
-        assertEquals(1L, conn.sync().exists(RootAuthenticationSessionKey.of("root-1").key()));
+        assertEquals(1L, conn.sync().exists(RootAuthenticationSessionKey.of(TestSessions.REALM_ID, "root-1").key()));
         assertTrue(conn.sync().smembers(AuthSessionIndexes.realmIndex(TestSessions.REALM_ID)).contains("root-1"));
 
         KeycloakSession session2 = TestSessions.newSession(provider());
@@ -108,7 +108,7 @@ class RedisAuthenticationSessionProviderIntegrationTest extends AbstractRedisInt
         session2.getTransactionManager().commit();
 
         RedisConnectionProvider conn = provider();
-        assertEquals(0L, conn.sync().exists(RootAuthenticationSessionKey.of("root-1").key()));
+        assertEquals(0L, conn.sync().exists(RootAuthenticationSessionKey.of(TestSessions.REALM_ID, "root-1").key()));
         assertTrue(conn.sync().smembers(AuthSessionIndexes.realmIndex(TestSessions.REALM_ID)).isEmpty());
 
         KeycloakSession session3 = TestSessions.newSession(provider());
@@ -135,7 +135,7 @@ class RedisAuthenticationSessionProviderIntegrationTest extends AbstractRedisInt
         root2.removeAuthenticationSessionByTabId(tab.getTabId());
         session2.getTransactionManager().commit();
 
-        assertEquals(0L, provider().sync().exists(RootAuthenticationSessionKey.of("root-1").key()));
+        assertEquals(0L, provider().sync().exists(RootAuthenticationSessionKey.of(TestSessions.REALM_ID, "root-1").key()));
 
         KeycloakSession session3 = TestSessions.newSession(provider());
         RealmModel realm3 = session3.realms().getRealm(TestSessions.REALM_ID);
@@ -160,8 +160,8 @@ class RedisAuthenticationSessionProviderIntegrationTest extends AbstractRedisInt
         session2.getTransactionManager().commit();
 
         RedisConnectionProvider conn = provider();
-        assertEquals(0L, conn.sync().exists(RootAuthenticationSessionKey.of("root-1").key()));
-        assertEquals(0L, conn.sync().exists(RootAuthenticationSessionKey.of("root-2").key()));
+        assertEquals(0L, conn.sync().exists(RootAuthenticationSessionKey.of(TestSessions.REALM_ID, "root-1").key()));
+        assertEquals(0L, conn.sync().exists(RootAuthenticationSessionKey.of(TestSessions.REALM_ID, "root-2").key()));
         assertTrue(conn.sync().smembers(AuthSessionIndexes.realmIndex(TestSessions.REALM_ID)).isEmpty());
     }
 }

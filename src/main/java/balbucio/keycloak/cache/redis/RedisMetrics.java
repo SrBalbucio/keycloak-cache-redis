@@ -1,7 +1,6 @@
 package balbucio.keycloak.cache.redis;
 
 import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.Metrics;
 
 /**
@@ -12,13 +11,7 @@ public final class RedisMetrics {
     public static final String CACHE_TAG = "cache";
     public static final String OPERATION_TAG = "op";
 
-    private static final String METRIC_NAME = "vendor.lettuce.cache";
-
-    private static final Meter.MeterProvider<Counter> COUNTER =
-            Counter.builder(METRIC_NAME)
-                    .description("Redis cache operation counters")
-                    .baseUnit("operations")
-                    .withRegistry(Metrics.globalRegistry);
+    public static final String METRIC_NAME = "vendor.lettuce.cache";
 
     private RedisMetrics() {}
 
@@ -27,7 +20,13 @@ public final class RedisMetrics {
             return;
         }
         try {
-            COUNTER.withTags(CACHE_TAG, cache, OPERATION_TAG, operation).increment();
+            Counter.builder(METRIC_NAME)
+                    .description("Redis cache operation counters")
+                    .baseUnit("operations")
+                    .tag(CACHE_TAG, cache)
+                    .tag(OPERATION_TAG, operation)
+                    .register(Metrics.globalRegistry)
+                    .increment();
         } catch (RuntimeException ignored) {
             // metrics must never break the request path
         }
@@ -62,6 +61,16 @@ public final class RedisMetrics {
         public static final String GET = "GET";
         public static final String SET = "SET";
         public static final String INCR = "INCR";
+        /** Cache outcome: successful read of a usable entry (L1 or L2). */
+        public static final String HIT = "HIT";
+        /** Cache outcome: absent or stale entry. */
+        public static final String MISS = "MISS";
+        /** Cache outcome: Redis/deser failure treated as miss (fail-open). */
+        public static final String ERROR = "ERROR";
+        /** Optimistic CAS conflict that triggered a rebase + retry. */
+        public static final String CAS_RETRY = "CAS_RETRY";
+        /** Optimistic CAS exhausted retries without a successful write. */
+        public static final String CAS_FAIL = "CAS_FAIL";
 
         private Op() {}
     }

@@ -50,7 +50,7 @@ public class RedisAuthenticationSessionProvider implements AuthenticationSession
         if (id == null) {
             id = KeycloakModelUtils.generateId();
         }
-        RootAuthenticationSessionKey key = RootAuthenticationSessionKey.of(id);
+        RootAuthenticationSessionKey key = RootAuthenticationSessionKey.of(realm.getId(), id);
         RedisRootAuthenticationSessionAdapter adapter =
                 RedisRootAuthenticationSessionAdapter.createNew(
                         session, this, key, realm, authSessionsLimit);
@@ -61,16 +61,15 @@ public class RedisAuthenticationSessionProvider implements AuthenticationSession
     @Override
     public RootAuthenticationSessionModel getRootAuthenticationSession(
             RealmModel realm, String authenticationSessionId) {
-        if (authenticationSessionId == null) {
+        if (authenticationSessionId == null || realm == null) {
             return null;
         }
         RedisRootAuthenticationSessionAdapter adapter =
-                roots.get(RootAuthenticationSessionKey.of(authenticationSessionId));
+                roots.get(RootAuthenticationSessionKey.of(realm.getId(), authenticationSessionId));
         if (adapter == null) {
             return null;
         }
-        if (realm != null
-                && !Objects.equals(realm.getId(), adapter.get(RedisRootAuthenticationSessionAdapter.REALM_ID))) {
+        if (!Objects.equals(realm.getId(), adapter.get(RedisRootAuthenticationSessionAdapter.REALM_ID))) {
             return null;
         }
         return adapter;
@@ -89,7 +88,7 @@ public class RedisAuthenticationSessionProvider implements AuthenticationSession
                             + realm.getId()
                             + "'");
         }
-        roots.delete(RootAuthenticationSessionKey.of(authenticationSession.getId()));
+        roots.delete(RootAuthenticationSessionKey.of(realm.getId(), authenticationSession.getId()));
     }
 
     @Override
@@ -99,7 +98,7 @@ public class RedisAuthenticationSessionProvider implements AuthenticationSession
             return;
         }
         for (String id : ids) {
-            roots.delete(RootAuthenticationSessionKey.of(id));
+            roots.delete(RootAuthenticationSessionKey.of(realm.getId(), id));
         }
     }
 

@@ -13,6 +13,7 @@ import java.util.stream.Stream;
 import balbucio.keycloak.cache.redis.RedisChangelogTransaction;
 import balbucio.keycloak.cache.redis.common.Constants;
 import balbucio.keycloak.cache.redis.connection.RedisConnectionProvider;
+import org.jboss.logging.Logger;
 import org.keycloak.common.util.Time;
 import org.keycloak.models.AuthenticatedClientSessionModel;
 import org.keycloak.models.ClientModel;
@@ -21,20 +22,25 @@ import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.UserSessionModel;
 import org.keycloak.models.UserSessionProvider;
+import org.keycloak.models.session.UserSessionPersisterProvider;
 import org.keycloak.models.utils.KeycloakModelUtils;
 
 public class RedisUserSessionProvider implements UserSessionProvider {
 
+    private static final Logger LOG = Logger.getLogger(RedisUserSessionProvider.class);
+
     private final KeycloakSession session;
     private final int startupTime;
+    private final boolean persistOfflineSessions;
     private final RedisConnectionProvider connection;
     private final RedisChangelogTransaction<UserSessionKey, RedisUserSessionAdapter> userSessions;
     private final RedisChangelogTransaction<AuthenticatedClientSessionKey, RedisAuthenticatedClientSessionAdapter>
             clientSessions;
 
-    public RedisUserSessionProvider(KeycloakSession session, int startupTime) {
+    public RedisUserSessionProvider(KeycloakSession session, int startupTime, boolean persistOfflineSessions) {
         this.session = session;
         this.startupTime = startupTime;
+        this.persistOfflineSessions = persistOfflineSessions;
         this.connection = session.getProvider(RedisConnectionProvider.class);
         this.userSessions =
                 new RedisChangelogTransaction<>(
@@ -60,13 +66,15 @@ public class RedisUserSessionProvider implements UserSessionProvider {
     public AuthenticatedClientSessionModel createClientSession(
             RealmModel realm, ClientModel client, UserSessionModel userSession) {
         AuthenticatedClientSessionKey key =
-                AuthenticatedClientSessionKey.of(userSession.getId(), client.getId(), userSession.isOffline());
+                AuthenticatedClientSessionKey.of(
+                        realm.getId(), userSession.getId(), client.getId(), userSession.isOffline());
         RedisAuthenticatedClientSessionAdapter adapter =
                 RedisAuthenticatedClientSessionAdapter.createNew(session, this, key, realm, client, userSession);
         clientSessions.create(key, adapter);
         if (userSession instanceof RedisUserSessionAdapter redisUserSession) {
             redisUserSession.addClientSession(client.getId());
         }
+        adjustClientStats(realm.getId(), client.getId(), userSession.isOffline(), 1);
         return adapter;
     }
 
@@ -76,13 +84,16 @@ public class RedisUserSessionProvider implements UserSessionProvider {
         if (userSession == null || client == null) {
             return null;
         }
-        AuthenticatedClientSessionKey key =
-                AuthenticatedClientSessionKey.of(userSession.getId(), client.getId(), offline);
-        RedisAuthenticatedClientSessionAdapter adapter = clientSessions.get(key);
-        if (adapter != null) {
-            return adapter;
+        String realmId = userSession.getRealm() != null ? userSession.getRealm().getId() : null;
+        if (realmId == null && userSession instanceof RedisUserSessionAdapter redis) {
+            realmId = redis.get(RedisUserSessionAdapter.REALM_ID);
         }
-        return null;
+        if (realmId == null) {
+            return null;
+        }
+        AuthenticatedClientSessionKey key =
+                AuthenticatedClientSessionKey.of(realmId, userSession.getId(), client.getId(), offline);
+        return clientSessions.get(key);
     }
 
     @Override
@@ -101,7 +112,7 @@ public class RedisUserSessionProvider implements UserSessionProvider {
         if (id == null) {
             id = KeycloakModelUtils.generateId();
         }
-        UserSessionKey key = UserSessionKey.of(id, false);
+        UserSessionKey key = UserSessionKey.of(realm.getId(), id, false);
         RedisUserSessionAdapter adapter =
                 RedisUserSessionAdapter.createNew(
                         session,
@@ -120,7 +131,6 @@ public class RedisUserSessionProvider implements UserSessionProvider {
                                 : persistenceState);
 
         if (adapter.getPersistenceState() == UserSessionModel.SessionPersistenceState.TRANSIENT) {
-            // Not enlisted — request-scoped only, never written to Redis
             return adapter;
         }
 
@@ -130,30 +140,28 @@ public class RedisUserSessionProvider implements UserSessionProvider {
 
     @Override
     public UserSessionModel getUserSession(RealmModel realm, String id) {
-        RedisUserSessionAdapter adapter = getUserSessionById(id, false);
-        if (adapter == null) {
+        if (realm == null || id == null) {
             return null;
         }
-        if (realm != null && !Objects.equals(realm.getId(), adapter.get(RedisUserSessionAdapter.REALM_ID))) {
-            return null;
-        }
-        return adapter;
+        return getUserSessionById(realm.getId(), id, false);
     }
 
-    RedisUserSessionAdapter getUserSessionById(String id, boolean offline) {
-        if (id == null) {
+    RedisUserSessionAdapter getUserSessionById(String realmId, String id, boolean offline) {
+        if (realmId == null || id == null) {
             return null;
         }
-        return userSessions.get(UserSessionKey.of(id, offline));
+        return userSessions.get(UserSessionKey.of(realmId, id, offline));
     }
 
-    void removeClientSession(String userSessionId, String clientId, boolean offline) {
-        clientSessions.delete(AuthenticatedClientSessionKey.of(userSessionId, clientId, offline));
+    void removeClientSession(String realmId, String userSessionId, String clientId, boolean offline) {
+        clientSessions.delete(AuthenticatedClientSessionKey.of(realmId, userSessionId, clientId, offline));
+        adjustClientStats(realmId, clientId, offline, -1);
     }
 
     @Override
     public Stream<UserSessionModel> getUserSessionsStream(RealmModel realm, UserModel user) {
-        return streamFromIndex(UserSessionIndexes.userIndex(user.getId(), false), realm, false);
+        return streamFromIndex(
+                UserSessionIndexes.userIndex(realm.getId(), user.getId(), false), realm, false);
     }
 
     @Override
@@ -164,25 +172,21 @@ public class RedisUserSessionProvider implements UserSessionProvider {
     @Override
     public Stream<UserSessionModel> getUserSessionsStream(
             RealmModel realm, ClientModel client, Integer firstResult, Integer maxResults) {
-        Stream<UserSessionModel> stream =
-                streamFromClientIndex(UserSessionIndexes.clientIndex(client.getId(), false), realm, false);
-        if (firstResult != null) {
-            stream = stream.skip(firstResult);
-        }
-        if (maxResults != null) {
-            stream = stream.limit(maxResults);
-        }
-        return stream;
+        return streamFromClientZIndex(realm, client.getId(), false, firstResult, maxResults);
     }
 
     @Override
     public Stream<UserSessionModel> getUserSessionByBrokerUserIdStream(RealmModel realm, String brokerUserId) {
-        return streamFromIndex(UserSessionIndexes.brokerUserIndex(brokerUserId, false), realm, false);
+        return streamFromIndex(
+                UserSessionIndexes.brokerUserIndex(realm.getId(), brokerUserId, false), realm, false);
     }
 
     @Override
     public UserSessionModel getUserSessionByBrokerSessionId(RealmModel realm, String brokerSessionId) {
-        return streamFromIndex(UserSessionIndexes.brokerSessionIndex(brokerSessionId, false), realm, false)
+        return streamFromIndex(
+                        UserSessionIndexes.brokerSessionIndex(realm.getId(), brokerSessionId, false),
+                        realm,
+                        false)
                 .findFirst()
                 .orElse(null);
     }
@@ -199,20 +203,37 @@ public class RedisUserSessionProvider implements UserSessionProvider {
 
     @Override
     public long getActiveUserSessions(RealmModel realm, ClientModel client) {
-        return getUserSessionsStream(realm, client).count();
+        Long n = connection.sync().zcard(UserSessionIndexes.clientZIndex(realm.getId(), client.getId(), false));
+        return n == null ? 0L : n;
     }
 
     @Override
     public Map<String, Long> getActiveClientSessionStats(RealmModel realm, boolean offline) {
         Map<String, Long> stats = new HashMap<>();
-        Set<String> ids = connection.sync().smembers(UserSessionIndexes.realmIndex(realm.getId(), offline));
-        if (ids == null || ids.isEmpty()) {
+        Set<String> clientIds =
+                connection.sync().smembers(UserSessionIndexes.clientStatsIndex(realm.getId(), offline));
+        if (clientIds == null || clientIds.isEmpty()) {
             return stats;
         }
-        List<UserSessionKey> keys = ids.stream().map(id -> UserSessionKey.of(id, offline)).toList();
-        for (RedisUserSessionAdapter sessionAdapter : userSessions.getAll(keys).values()) {
-            for (String clientId : sessionAdapter.getMap(Constants.CLIENT_SESSION_PREFIX).keySet()) {
-                stats.merge(clientId, 1L, Long::sum);
+        List<String> keys = new ArrayList<>(clientIds.size());
+        List<String> ordered = new ArrayList<>(clientIds.size());
+        for (String clientId : clientIds) {
+            ordered.add(clientId);
+            keys.add(UserSessionIndexes.clientStats(realm.getId(), clientId, offline));
+        }
+        List<String> values = connection.sync().mget(keys.toArray(new String[0]));
+        for (int i = 0; i < ordered.size(); i++) {
+            String raw = values != null && i < values.size() ? values.get(i) : null;
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            try {
+                long n = Long.parseLong(raw.trim());
+                if (n > 0) {
+                    stats.put(ordered.get(i), n);
+                }
+            } catch (NumberFormatException ignored) {
+                // skip bad counter
             }
         }
         return stats;
@@ -223,17 +244,21 @@ public class RedisUserSessionProvider implements UserSessionProvider {
         if (session == null) {
             return;
         }
-        removeUserSession(session.getId(), session.isOffline());
+        String realmId = realm != null ? realm.getId() : session.getRealm().getId();
+        removeUserSession(realmId, session.getId(), session.isOffline());
     }
 
-    private void removeUserSession(String id, boolean offline) {
-        RedisUserSessionAdapter adapter = getUserSessionById(id, offline);
+    private void removeUserSession(String realmId, String id, boolean offline) {
+        RedisUserSessionAdapter adapter = getUserSessionById(realmId, id, offline);
         if (adapter != null) {
             for (String clientId : Map.copyOf(adapter.getMap(Constants.CLIENT_SESSION_PREFIX)).keySet()) {
-                removeClientSession(id, clientId, offline);
+                removeClientSession(realmId, id, clientId, offline);
             }
         }
-        userSessions.delete(UserSessionKey.of(id, offline));
+        userSessions.delete(UserSessionKey.of(realmId, id, offline));
+        if (offline && persistOfflineSessions) {
+            persistRemoveUserSession(id, true);
+        }
     }
 
     @Override
@@ -269,23 +294,37 @@ public class RedisUserSessionProvider implements UserSessionProvider {
         if (ids == null || ids.isEmpty()) {
             return;
         }
-        // Pipeline-load sessions so client-session cleanup avoids N+1 GETs before deletes.
-        List<UserSessionKey> keys = ids.stream().map(id -> UserSessionKey.of(id, offline)).toList();
+        List<UserSessionKey> keys =
+                ids.stream().map(id -> UserSessionKey.of(realmId, id, offline)).toList();
         Map<UserSessionKey, RedisUserSessionAdapter> loaded = userSessions.getAll(keys);
         for (String id : ids) {
-            RedisUserSessionAdapter adapter = loaded.get(UserSessionKey.of(id, offline));
+            RedisUserSessionAdapter adapter = loaded.get(UserSessionKey.of(realmId, id, offline));
             if (adapter != null) {
                 for (String clientId : Map.copyOf(adapter.getMap(Constants.CLIENT_SESSION_PREFIX)).keySet()) {
-                    removeClientSession(id, clientId, offline);
+                    removeClientSession(realmId, id, clientId, offline);
                 }
             }
-            userSessions.delete(UserSessionKey.of(id, offline));
+            userSessions.delete(UserSessionKey.of(realmId, id, offline));
         }
+        Set<String> statClients =
+                connection.sync().smembers(UserSessionIndexes.clientStatsIndex(realmId, offline));
+        if (statClients != null) {
+            for (String clientId : statClients) {
+                connection.sync().del(UserSessionIndexes.clientStats(realmId, clientId, offline));
+            }
+        }
+        connection.sync().del(UserSessionIndexes.clientStatsIndex(realmId, offline));
     }
 
     @Override
     public void onRealmRemoved(RealmModel realm) {
         removeUserSessions(realm);
+        if (persistOfflineSessions) {
+            UserSessionPersisterProvider persister = session.getProvider(UserSessionPersisterProvider.class);
+            if (persister != null) {
+                persister.onRealmRemoved(realm);
+            }
+        }
     }
 
     @Override
@@ -299,17 +338,22 @@ public class RedisUserSessionProvider implements UserSessionProvider {
         for (UserSessionModel s : offline) {
             s.removeAuthenticatedClientSessions(List.of(client.getId()));
         }
+        connection.sync().del(UserSessionIndexes.clientStats(realm.getId(), client.getId(), false));
+        connection.sync().del(UserSessionIndexes.clientStats(realm.getId(), client.getId(), true));
+        connection.sync().srem(UserSessionIndexes.clientStatsIndex(realm.getId(), false), client.getId());
+        connection.sync().srem(UserSessionIndexes.clientStatsIndex(realm.getId(), true), client.getId());
     }
 
     @Override
     public UserSessionModel createOfflineUserSession(UserSessionModel userSession) {
-        UserSessionKey key = UserSessionKey.of(userSession.getId(), true);
+        RealmModel realm = userSession.getRealm();
+        UserSessionKey key = UserSessionKey.of(realm.getId(), userSession.getId(), true);
         RedisUserSessionAdapter offline =
                 RedisUserSessionAdapter.createNew(
                         session,
                         this,
                         key,
-                        userSession.getRealm(),
+                        realm,
                         userSession.getUser(),
                         userSession.getLoginUsername(),
                         userSession.getIpAddress(),
@@ -322,23 +366,21 @@ public class RedisUserSessionProvider implements UserSessionProvider {
         offline.setLastSessionRefresh(Time.currentTime());
         userSessions.create(key, offline);
 
-        // corresponding index on online session
         if (userSession instanceof RedisUserSessionAdapter online) {
             online.setNote(UserSessionModel.CORRESPONDING_SESSION_ID, offline.getId());
+        }
+        if (persistOfflineSessions) {
+            persistCreateUserSession(offline, true);
         }
         return offline;
     }
 
     @Override
     public UserSessionModel getOfflineUserSession(RealmModel realm, String userSessionId) {
-        RedisUserSessionAdapter adapter = getUserSessionById(userSessionId, true);
-        if (adapter == null) {
+        if (realm == null || userSessionId == null) {
             return null;
         }
-        if (realm != null && !Objects.equals(realm.getId(), adapter.get(RedisUserSessionAdapter.REALM_ID))) {
-            return null;
-        }
-        return adapter;
+        return getUserSessionById(realm.getId(), userSessionId, true);
     }
 
     @Override
@@ -346,18 +388,21 @@ public class RedisUserSessionProvider implements UserSessionProvider {
         if (userSession == null) {
             return;
         }
-        removeUserSession(userSession.getId(), true);
+        String realmId = realm != null ? realm.getId() : userSession.getRealm().getId();
+        removeUserSession(realmId, userSession.getId(), true);
     }
 
     @Override
     public AuthenticatedClientSessionModel createOfflineClientSession(
             AuthenticatedClientSessionModel clientSession, UserSessionModel offlineUserSession) {
         ClientModel client = clientSession.getClient();
+        RealmModel realm = offlineUserSession.getRealm();
         AuthenticatedClientSessionKey key =
-                AuthenticatedClientSessionKey.of(offlineUserSession.getId(), client.getId(), true);
+                AuthenticatedClientSessionKey.of(
+                        realm.getId(), offlineUserSession.getId(), client.getId(), true);
         RedisAuthenticatedClientSessionAdapter adapter =
                 RedisAuthenticatedClientSessionAdapter.createNew(
-                        session, this, key, offlineUserSession.getRealm(), client, offlineUserSession);
+                        session, this, key, realm, client, offlineUserSession);
         adapter.setRedirectUri(clientSession.getRedirectUri());
         adapter.setProtocol(clientSession.getProtocol());
         for (Map.Entry<String, String> note : clientSession.getNotes().entrySet()) {
@@ -367,37 +412,36 @@ public class RedisUserSessionProvider implements UserSessionProvider {
         if (offlineUserSession instanceof RedisUserSessionAdapter redisUserSession) {
             redisUserSession.addClientSession(client.getId());
         }
+        adjustClientStats(realm.getId(), client.getId(), true, 1);
+        if (persistOfflineSessions) {
+            persistCreateClientSession(adapter, true);
+        }
         return adapter;
     }
 
     @Override
     public Stream<UserSessionModel> getOfflineUserSessionsStream(RealmModel realm, UserModel user) {
-        return streamFromIndex(UserSessionIndexes.userIndex(user.getId(), true), realm, true);
+        return streamFromIndex(
+                UserSessionIndexes.userIndex(realm.getId(), user.getId(), true), realm, true);
     }
 
     @Override
     public Stream<UserSessionModel> getOfflineUserSessionByBrokerUserIdStream(
             RealmModel realm, String brokerUserId) {
-        return streamFromIndex(UserSessionIndexes.brokerUserIndex(brokerUserId, true), realm, true);
+        return streamFromIndex(
+                UserSessionIndexes.brokerUserIndex(realm.getId(), brokerUserId, true), realm, true);
     }
 
     @Override
     public long getOfflineSessionsCount(RealmModel realm, ClientModel client) {
-        return getOfflineUserSessionsStream(realm, client, null, null).count();
+        Long n = connection.sync().zcard(UserSessionIndexes.clientZIndex(realm.getId(), client.getId(), true));
+        return n == null ? 0L : n;
     }
 
     @Override
     public Stream<UserSessionModel> getOfflineUserSessionsStream(
             RealmModel realm, ClientModel client, Integer firstResult, Integer maxResults) {
-        Stream<UserSessionModel> stream =
-                streamFromClientIndex(UserSessionIndexes.clientIndex(client.getId(), true), realm, true);
-        if (firstResult != null) {
-            stream = stream.skip(firstResult);
-        }
-        if (maxResults != null) {
-            stream = stream.limit(maxResults);
-        }
-        return stream;
+        return streamFromClientZIndex(realm, client.getId(), true, firstResult, maxResults);
     }
 
     @Override
@@ -413,38 +457,51 @@ public class RedisUserSessionProvider implements UserSessionProvider {
         return startupTime;
     }
 
+    boolean isPersistOfflineSessions() {
+        return persistOfflineSessions;
+    }
+
     private Stream<UserSessionModel> streamFromIndex(String indexKey, RealmModel realm, boolean offline) {
         Set<String> ids = connection.sync().smembers(indexKey);
         if (ids == null || ids.isEmpty()) {
             return Stream.empty();
         }
-        List<UserSessionKey> keys = ids.stream().map(id -> UserSessionKey.of(id, offline)).toList();
+        String realmId = realm.getId();
+        List<UserSessionKey> keys =
+                ids.stream().map(id -> UserSessionKey.of(realmId, id, offline)).toList();
         Map<UserSessionKey, RedisUserSessionAdapter> loaded = userSessions.getAll(keys);
-        return loaded.values().stream()
-                .filter(s -> realm == null || Objects.equals(realm.getId(), s.get(RedisUserSessionAdapter.REALM_ID)))
-                .map(UserSessionModel.class::cast);
+        return loaded.values().stream().map(UserSessionModel.class::cast);
     }
 
-    private Stream<UserSessionModel> streamFromClientIndex(String indexKey, RealmModel realm, boolean offline) {
-        Set<String> compoundIds = connection.sync().smembers(indexKey);
-        if (compoundIds == null || compoundIds.isEmpty()) {
+    private Stream<UserSessionModel> streamFromClientZIndex(
+            RealmModel realm, String clientId, boolean offline, Integer firstResult, Integer maxResults) {
+        long start = firstResult == null ? 0L : Math.max(0L, firstResult.longValue());
+        long stop;
+        if (maxResults == null) {
+            stop = -1L;
+        } else if (maxResults <= 0) {
+            return Stream.empty();
+        } else {
+            stop = start + maxResults - 1;
+        }
+        List<String> ids =
+                connection
+                        .sync()
+                        .zrevrange(
+                                UserSessionIndexes.clientZIndex(realm.getId(), clientId, offline),
+                                start,
+                                stop);
+        if (ids == null || ids.isEmpty()) {
             return Stream.empty();
         }
-        List<UserSessionKey> keys = new ArrayList<>();
-        for (String compound : compoundIds) {
-            int sep = compound.indexOf("::");
-            if (sep <= 0) {
-                continue;
-            }
-            keys.add(UserSessionKey.of(compound.substring(0, sep), offline));
-        }
+        String realmId = realm.getId();
+        List<UserSessionKey> keys =
+                ids.stream().map(id -> UserSessionKey.of(realmId, id, offline)).toList();
         Map<UserSessionKey, RedisUserSessionAdapter> loaded = userSessions.getAll(keys);
-        return loaded.values().stream()
-                .filter(
-                        adapter ->
-                                realm == null
-                                        || Objects.equals(
-                                                realm.getId(), adapter.get(RedisUserSessionAdapter.REALM_ID)))
+        // Preserve ZSET order
+        return ids.stream()
+                .map(id -> loaded.get(UserSessionKey.of(realmId, id, offline)))
+                .filter(Objects::nonNull)
                 .map(UserSessionModel.class::cast);
     }
 
@@ -454,40 +511,106 @@ public class RedisUserSessionProvider implements UserSessionProvider {
         String id = adapter.getId();
         String realmId = adapter.get(RedisUserSessionAdapter.REALM_ID);
         String userId = adapter.get(RedisUserSessionAdapter.USER_ID);
-        if (realmId != null) {
-            indexes.add(new RedisChangelogTransaction.IndexUpdate(UserSessionIndexes.realmIndex(realmId, offline), id));
+        if (realmId == null) {
+            return indexes;
         }
+        indexes.add(new RedisChangelogTransaction.IndexUpdate(UserSessionIndexes.realmIndex(realmId, offline), id));
+        double refreshScore = adapter.getLastSessionRefresh();
+        indexes.add(
+                RedisChangelogTransaction.IndexUpdate.zset(
+                        UserSessionIndexes.realmZIndex(realmId, offline), id, refreshScore));
         if (userId != null) {
-            indexes.add(new RedisChangelogTransaction.IndexUpdate(UserSessionIndexes.userIndex(userId, offline), id));
+            indexes.add(
+                    new RedisChangelogTransaction.IndexUpdate(
+                            UserSessionIndexes.userIndex(realmId, userId, offline), id));
         }
         String brokerSessionId = adapter.get(RedisUserSessionAdapter.BROKER_SESSION_ID);
         if (brokerSessionId != null) {
             indexes.add(
                     new RedisChangelogTransaction.IndexUpdate(
-                            UserSessionIndexes.brokerSessionIndex(brokerSessionId, offline), id));
+                            UserSessionIndexes.brokerSessionIndex(realmId, brokerSessionId, offline), id));
         }
         String brokerUserId = adapter.get(RedisUserSessionAdapter.BROKER_USER_ID);
         if (brokerUserId != null) {
             indexes.add(
                     new RedisChangelogTransaction.IndexUpdate(
-                            UserSessionIndexes.brokerUserIndex(brokerUserId, offline), id));
+                            UserSessionIndexes.brokerUserIndex(realmId, brokerUserId, offline), id));
         }
         String corresponding = adapter.getNote(UserSessionModel.CORRESPONDING_SESSION_ID);
         if (corresponding != null) {
             indexes.add(
                     new RedisChangelogTransaction.IndexUpdate(
-                            UserSessionIndexes.correspondingSessionIndex(corresponding, offline), id));
+                            UserSessionIndexes.correspondingSessionIndex(realmId, corresponding, offline),
+                            id));
+        }
+        for (String clientId : adapter.getMap(Constants.CLIENT_SESSION_PREFIX).keySet()) {
+            indexes.add(
+                    RedisChangelogTransaction.IndexUpdate.zset(
+                            UserSessionIndexes.clientZIndex(realmId, clientId, offline), id, refreshScore));
+            indexes.add(
+                    new RedisChangelogTransaction.IndexUpdate(
+                            UserSessionIndexes.clientIndex(realmId, clientId, offline), id));
         }
         return indexes;
     }
 
     private Collection<RedisChangelogTransaction.IndexUpdate> clientSessionIndexes(
             RedisAuthenticatedClientSessionAdapter adapter) {
-        List<RedisChangelogTransaction.IndexUpdate> indexes = new ArrayList<>();
-        AuthenticatedClientSessionKey key = adapter.getKey();
-        indexes.add(
-                new RedisChangelogTransaction.IndexUpdate(
-                        UserSessionIndexes.clientIndex(key.clientId(), key.offline()), key.compoundId()));
-        return indexes;
+        // Client-session entity indexes are maintained on the user-session side (client ZSET/SET).
+        return List.of();
+    }
+
+    private void adjustClientStats(String realmId, String clientId, boolean offline, long delta) {
+        if (realmId == null || clientId == null || delta == 0) {
+            return;
+        }
+        try {
+            String statsKey = UserSessionIndexes.clientStats(realmId, clientId, offline);
+            Long value = connection.sync().incrby(statsKey, delta);
+            String indexKey = UserSessionIndexes.clientStatsIndex(realmId, offline);
+            if (value != null && value > 0) {
+                connection.sync().sadd(indexKey, clientId);
+            } else {
+                connection.sync().srem(indexKey, clientId);
+                if (value != null && value <= 0) {
+                    connection.sync().del(statsKey);
+                }
+            }
+        } catch (Exception e) {
+            LOG.debugf(e, "Failed to adjust client session stats for %s/%s", realmId, clientId);
+        }
+    }
+
+    private void persistCreateUserSession(UserSessionModel model, boolean offline) {
+        try {
+            UserSessionPersisterProvider persister = session.getProvider(UserSessionPersisterProvider.class);
+            if (persister != null) {
+                persister.createUserSession(model, offline);
+            }
+        } catch (Exception e) {
+            LOG.warnf(e, "Failed to persist offline user session %s", model.getId());
+        }
+    }
+
+    private void persistCreateClientSession(AuthenticatedClientSessionModel model, boolean offline) {
+        try {
+            UserSessionPersisterProvider persister = session.getProvider(UserSessionPersisterProvider.class);
+            if (persister != null) {
+                persister.createClientSession(model, offline);
+            }
+        } catch (Exception e) {
+            LOG.warnf(e, "Failed to persist offline client session");
+        }
+    }
+
+    private void persistRemoveUserSession(String id, boolean offline) {
+        try {
+            UserSessionPersisterProvider persister = session.getProvider(UserSessionPersisterProvider.class);
+            if (persister != null) {
+                persister.removeUserSession(id, offline);
+            }
+        } catch (Exception e) {
+            LOG.warnf(e, "Failed to remove persisted offline user session %s", id);
+        }
     }
 }

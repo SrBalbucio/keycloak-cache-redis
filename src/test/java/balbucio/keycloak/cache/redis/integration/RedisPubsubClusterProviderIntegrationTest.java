@@ -13,6 +13,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -119,6 +120,77 @@ class RedisPubsubClusterProviderIntegrationTest extends AbstractRedisIntegration
             ExecutionResult<String> first = firstFuture.get(5, TimeUnit.SECONDS);
             assertTrue(first.isExecuted());
             assertEquals("done", first.getResult());
+            assertEquals(1, runs.get());
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void executeIfNotExecutedAsyncCompletesWinnerWithoutFullTimeout() throws Exception {
+        RedisConnectionProvider conn = provider();
+        RedisSync publisher = conn.sync();
+        ExecutorService executor = Executors.newCachedThreadPool();
+        try {
+            RedisPubsubClusterProvider cluster =
+                    new RedisPubsubClusterProvider(publisher, conn.connectPubSub(), 100, executor, "node-a");
+            Thread.sleep(200);
+
+            long started = System.nanoTime();
+            Future<Boolean> future =
+                    cluster.executeIfNotExecutedAsync("async-winner", 30, () -> "ok");
+            assertTrue(future.get(5, TimeUnit.SECONDS));
+            assertTrue(
+                    TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started) < 10,
+                    "winner should not wait for the full lock timeout");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void executeIfNotExecutedAsyncWaiterCompletesAfterOtherNodeUnlocks() throws Exception {
+        RedisConnectionProvider conn = provider();
+        RedisSync publisher = conn.sync();
+        ExecutorService executor = Executors.newCachedThreadPool();
+        try {
+            RedisPubsubClusterProvider nodeA =
+                    new RedisPubsubClusterProvider(publisher, conn.connectPubSub(), 100, executor, "node-a");
+            RedisPubsubClusterProvider nodeB =
+                    new RedisPubsubClusterProvider(publisher, conn.connectPubSub(), 100, executor, "node-b");
+            Thread.sleep(300);
+
+            CountDownLatch holderStarted = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            AtomicInteger runs = new AtomicInteger();
+
+            Future<Boolean> holder =
+                    nodeA.executeIfNotExecutedAsync(
+                            "async-cross",
+                            30,
+                            () -> {
+                                holderStarted.countDown();
+                                assertTrue(release.await(5, TimeUnit.SECONDS));
+                                runs.incrementAndGet();
+                                return "done";
+                            });
+
+            assertTrue(holderStarted.await(5, TimeUnit.SECONDS));
+
+            Future<Boolean> waiter =
+                    nodeB.executeIfNotExecutedAsync(
+                            "async-cross",
+                            30,
+                            () -> {
+                                runs.incrementAndGet();
+                                return "should-not-run";
+                            });
+
+            Thread.sleep(200);
+            release.countDown();
+
+            assertTrue(holder.get(5, TimeUnit.SECONDS));
+            assertTrue(waiter.get(5, TimeUnit.SECONDS));
             assertEquals(1, runs.get());
         } finally {
             executor.shutdownNow();

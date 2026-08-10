@@ -28,7 +28,7 @@ Prefixo SPI: `KC_SPI_REDIS_CONNECTION_DEFAULT_*`
 | `KC_SPI_REDIS_CONNECTION_DEFAULT_KEY_PREFIX` | Prefixo de todas as chaves | `kc` → `kc:` |
 | `KC_REDIS_KEY_PREFIX` | Alias de env para o prefixo | `kc` |
 
-Com prefixo `kc`, as chaves ficam como `kc:user-session:<id>`, `kc:auth-session:<id>`, `kc:cluster:events`, `kc:authz:...`, etc.
+Com prefixo `kc`, as chaves ficam como `kc:{realmId}:user-session:<id>`, `kc:{realmId}:auth-session:<id>`, `kc:cluster:events`, `kc:authz:...`, etc.
 
 ### Conexão Redis separada (Authorization)
 
@@ -46,6 +46,12 @@ Se `NODES` estiver vazio, authz usa o connection `default`.
 | Variável | Descrição | Default |
 |----------|-----------|---------|
 | `KC_SPI_SINGLE_USE_OBJECT_INFINISPAN_PERSIST_REVOKED_TOKENS` | Write-through JPA + preload no boot | `true` |
+
+### User sessions / offline
+
+| Variável | Descrição | Default |
+|----------|-----------|---------|
+| `KC_SPI_USER_SESSIONS_INFINISPAN_PERSIST_OFFLINE_SESSIONS` | Write-through JPA + preload offline no boot | `false` |
 
 ### Entity cache MVP
 

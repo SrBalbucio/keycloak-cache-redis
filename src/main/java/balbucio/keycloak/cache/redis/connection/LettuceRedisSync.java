@@ -1,7 +1,11 @@
 package balbucio.keycloak.cache.redis.connection;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import io.lettuce.core.KeyValue;
 
 import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.SetArgs;
@@ -68,6 +72,11 @@ public final class LettuceRedisSync implements RedisSync {
     }
 
     @Override
+    public Long incrby(String key, long amount) {
+        return delegate.incrby(key, amount);
+    }
+
+    @Override
     public Long sadd(String key, String... members) {
         return delegate.sadd(key, members);
     }
@@ -83,8 +92,38 @@ public final class LettuceRedisSync implements RedisSync {
     }
 
     @Override
+    public Long scard(String key) {
+        return delegate.scard(key);
+    }
+
+    @Override
+    public Long zadd(String key, double score, String member) {
+        return delegate.zadd(key, score, member);
+    }
+
+    @Override
+    public Long zrem(String key, String... members) {
+        return delegate.zrem(key, members);
+    }
+
+    @Override
+    public List<String> zrevrange(String key, long start, long stop) {
+        return delegate.zrevrange(key, start, stop);
+    }
+
+    @Override
+    public Long zcard(String key) {
+        return delegate.zcard(key);
+    }
+
+    @Override
     public String get(String key) {
         return delegate.get(key);
+    }
+
+    @Override
+    public List<String> mget(String... keys) {
+        return delegate.mget(keys);
     }
 
     @Override
@@ -176,13 +215,27 @@ public final class LettuceRedisSync implements RedisSync {
 
         Long incr(String key);
 
+        Long incrby(String key, long amount);
+
         Long sadd(String key, String... members);
 
         Long srem(String key, String... members);
 
         Set<String> smembers(String key);
 
+        Long scard(String key);
+
+        Long zadd(String key, double score, String member);
+
+        Long zrem(String key, String... members);
+
+        List<String> zrevrange(String key, long start, long stop);
+
+        Long zcard(String key);
+
         String get(String key);
+
+        List<String> mget(String... keys);
 
         String set(String key, String value);
 
@@ -251,6 +304,56 @@ public final class LettuceRedisSync implements RedisSync {
         @Override
         public Long incr(String key) {
             return c.incr(key);
+        }
+
+        @Override
+        public Long incrby(String key, long amount) {
+            return c.incrby(key, amount);
+        }
+
+        @Override
+        public Long scard(String key) {
+            return c.scard(key);
+        }
+
+        @Override
+        public Long zadd(String key, double score, String member) {
+            return c.zadd(key, score, member);
+        }
+
+        @Override
+        public Long zrem(String key, String... members) {
+            return c.zrem(key, members);
+        }
+
+        @Override
+        public List<String> zrevrange(String key, long start, long stop) {
+            List<String> out = c.zrevrange(key, start, stop);
+            return out == null ? List.of() : out;
+        }
+
+        @Override
+        public Long zcard(String key) {
+            return c.zcard(key);
+        }
+
+        @Override
+        public List<String> mget(String... keys) {
+            if (keys == null || keys.length == 0) {
+                return List.of();
+            }
+            List<KeyValue<String, String>> raw = c.mget(keys);
+            List<String> out = new ArrayList<>(keys.length);
+            if (raw == null) {
+                for (int i = 0; i < keys.length; i++) {
+                    out.add(null);
+                }
+                return out;
+            }
+            for (KeyValue<String, String> kv : raw) {
+                out.add(kv == null || !kv.hasValue() ? null : kv.getValue());
+            }
+            return out;
         }
 
         @Override
@@ -379,6 +482,56 @@ public final class LettuceRedisSync implements RedisSync {
         @Override
         public Long incr(String key) {
             return c.incr(key);
+        }
+
+        @Override
+        public Long incrby(String key, long amount) {
+            return c.incrby(key, amount);
+        }
+
+        @Override
+        public Long scard(String key) {
+            return c.scard(key);
+        }
+
+        @Override
+        public Long zadd(String key, double score, String member) {
+            return c.zadd(key, score, member);
+        }
+
+        @Override
+        public Long zrem(String key, String... members) {
+            return c.zrem(key, members);
+        }
+
+        @Override
+        public List<String> zrevrange(String key, long start, long stop) {
+            List<String> out = c.zrevrange(key, start, stop);
+            return out == null ? List.of() : out;
+        }
+
+        @Override
+        public Long zcard(String key) {
+            return c.zcard(key);
+        }
+
+        @Override
+        public List<String> mget(String... keys) {
+            if (keys == null || keys.length == 0) {
+                return List.of();
+            }
+            List<KeyValue<String, String>> raw = c.mget(keys);
+            List<String> out = new ArrayList<>(keys.length);
+            if (raw == null) {
+                for (int i = 0; i < keys.length; i++) {
+                    out.add(null);
+                }
+                return out;
+            }
+            for (KeyValue<String, String> kv : raw) {
+                out.add(kv == null || !kv.hasValue() ? null : kv.getValue());
+            }
+            return out;
         }
 
         @Override

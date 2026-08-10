@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Authz cache outcome metrics (`HIT` / `MISS` / `ERROR`) and CAS conflict metrics (`CAS_RETRY` / `CAS_FAIL`).
+- Cluster async lock completion via PUBSUB channel `cluster:task-finished`.
+- Redis Cluster hash-tags `{realmId}` for user/auth sessions and indexes (aligned with login-failure).
+- ZSET indexes by `lastSessionRefresh` + `ZREVRANGE` admin pagination.
+- Redis counters for `getActiveClientSessionStats`.
+- Optional offline session JPA write-through / preload (`persistOfflineSessions`, default false).
 - `RedisPublicKeyStorageProvider`: Redis L2 + L1 + PUBSUB invalidation for public keys (SPI id `infinispan`).
 - Separate `redisConnection` factory `id=authz` (`KC_SPI_REDIS_CONNECTION_AUTHZ_*`) with fallback to `default`.
 - Durable revoked tokens: write-through to `RevokedTokenPersisterProvider` + preload on `PostMigrationEvent` (`persistRevokedTokens`, default true).
@@ -27,11 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `ResourceAdapter.getScopes()` now resolves cached `scopeIds` on cache hit.
+- `executeIfNotExecutedAsync` now completes waiters (previously timed out without `taskFinished`).
 
 ### Changed
 
 - Login-failure Redis key layout uses hash-tags (breaking for existing login-failure keys).
-- `getActiveClientSessionStats` / client-index streams use pipelined `getAll`.
+- User/auth session Redis key layout uses `{realmId}` hash-tags (breaking for existing session keys).
+- `getActiveClientSessionStats` reads Redis counters instead of hydrating all sessions.
 - External `REDIS_TEST_URI` no longer allows `FLUSHDB` unless `REDIS_TEST_ALLOW_FLUSH=true`.
 
 ## [1.0.0] - TBD

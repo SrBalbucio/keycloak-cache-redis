@@ -169,7 +169,7 @@ public class RedisUserSessionAdapter extends MapEntity implements UserSessionMod
         }
         for (String clientId : removedClientUUIDS) {
             removeMapEntry(Constants.CLIENT_SESSION_PREFIX, clientId);
-            provider.removeClientSession(getId(), clientId, isOffline());
+            provider.removeClientSession(key.realmId(), getId(), clientId, isOffline());
         }
     }
 
@@ -249,7 +249,7 @@ public class RedisUserSessionAdapter extends MapEntity implements UserSessionMod
         }
         for (String clientId : Map.copyOf(getMap(Constants.CLIENT_SESSION_PREFIX)).keySet()) {
             removeMapEntry(Constants.CLIENT_SESSION_PREFIX, clientId);
-            provider.removeClientSession(getId(), clientId, isOffline());
+            provider.removeClientSession(key.realmId(), getId(), clientId, isOffline());
         }
         updateExpiration();
     }

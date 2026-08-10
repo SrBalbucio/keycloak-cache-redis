@@ -30,6 +30,7 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
 
     public static final String TASK_KEY_PREFIX = "task::";
     static final String CHANNEL_RELATIVE = "cluster:events";
+    static final String TASK_FINISHED_CHANNEL_RELATIVE = "cluster:task-finished";
     static final String LOCK_PREFIX_RELATIVE = "cluster:lock:";
 
     private final RedisSync publisher;
@@ -38,6 +39,7 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
     private final ExecutorService executor;
     private final String nodeId;
     private final String channel;
+    private final String taskFinishedChannel;
 
     private final ConcurrentMultivaluedHashMap<String, ClusterListener> listeners =
             new ConcurrentMultivaluedHashMap<>();
@@ -55,6 +57,7 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
         this.executor = executor;
         this.nodeId = nodeId;
         this.channel = RedisKeySpace.key(CHANNEL_RELATIVE);
+        this.taskFinishedChannel = RedisKeySpace.key(TASK_FINISHED_CHANNEL_RELATIVE);
 
         subscriber.addListener(
                 new RedisPubSubAdapter<String, String>() {
@@ -62,11 +65,15 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
                     public void message(String ch, String message) {
                         if (channel.equals(ch)) {
                             handleMessage(message);
+                        } else if (taskFinishedChannel.equals(ch)) {
+                            taskFinished(message);
                         }
                     }
                 });
-        subscriber.sync().subscribe(channel);
-        LOG.debugf("Subscribed to Redis cluster channel %s (node=%s)", channel, nodeId);
+        subscriber.sync().subscribe(channel, taskFinishedChannel);
+        LOG.debugf(
+                "Subscribed to Redis cluster channels %s,%s (node=%s)",
+                channel, taskFinishedChannel, nodeId);
     }
 
     @Override
@@ -166,6 +173,7 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
                     } catch (Exception unlockError) {
                         LOG.debugf(unlockError, "Failed to release cluster lock %s", lockKey);
                     }
+                    notifyTaskFinished(taskKey);
                 }
             }
             return ExecutionResult.notExecuted();
@@ -173,6 +181,33 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
             // Distinguish Redis errors from "lock held" so callers can retry / alert.
             LOG.warnf(e, "Error acquiring or running cluster lock for %s", taskKey);
             throw new RuntimeException("Redis error during cluster lock for " + taskKey, e);
+        }
+    }
+
+    /**
+     * Completes waiters registered for {@code taskKey} (with {@link #TASK_KEY_PREFIX}). Idempotent
+     * if the callback was already removed.
+     */
+    void taskFinished(String taskKey) {
+        if (taskKey == null || taskKey.isBlank()) {
+            return;
+        }
+        TaskCallback callback = taskCallbacks.remove(taskKey);
+        if (callback != null) {
+            callback.setSuccess(true);
+            callback.getTaskCompletedLatch().countDown();
+            LOG.debugf("Cluster task finished: %s", taskKey);
+        }
+    }
+
+    private void notifyTaskFinished(String taskKey) {
+        String callbackKey = TASK_KEY_PREFIX + taskKey;
+        taskFinished(callbackKey);
+        try {
+            publisher.publish(taskFinishedChannel, callbackKey);
+            RedisMetrics.record(RedisMetrics.Cache.CLUSTER, RedisMetrics.Op.PUBLISH);
+        } catch (Exception e) {
+            LOG.debugf(e, "Failed to publish task-finished for %s", taskKey);
         }
     }
 
@@ -213,7 +248,7 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
         try {
             if (subscriber != null && subscriber.isOpen()) {
                 try {
-                    subscriber.sync().unsubscribe(channel);
+                    subscriber.sync().unsubscribe(channel, taskFinishedChannel);
                 } catch (Exception e) {
                     LOG.debug("Error unsubscribing from cluster channel", e);
                 }

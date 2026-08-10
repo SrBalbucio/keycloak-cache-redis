@@ -54,6 +54,7 @@ public class LocalAuthorizationCache extends RedisAuthorizationCache {
             long now = System.currentTimeMillis();
             if (local.expireAt > now) {
                 LOG.tracef("Local LRU hit for %s", key);
+                RedisMetrics.record(RedisMetrics.Cache.AUTHZ, RedisMetrics.Op.HIT);
                 return type.cast(local.value);
             }
             sharedLru.remove(key);

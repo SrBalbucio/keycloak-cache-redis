@@ -11,12 +11,19 @@ Factory: `RedisPubsubClusterProviderFactory` (id `infinispan`, order `3`)
 | Recurso | Chave / canal (relativo) |
 |---------|--------------------------|
 | Eventos de invalidação | canal PUBSUB `cluster:events` |
+| Conclusão de task async | canal PUBSUB `cluster:task-finished` |
 | Distributed locks | `cluster:lock:<task>` |
 | Cluster start time | `cluster:startTime` |
 
 ### Eventos
 
 Serializa eventos de invalidação do Keycloak (realm, user, client, role, group, client scope, federation links, consents, etc.) com Jackson mixins e publica no canal PUBSUB. Os outros nós aplicam a invalidação nos caches locais.
+
+### Distributed locks
+
+`executeIfNotExecuted` usa `SET NX EX` + unlock Lua tokenizado. `executeIfNotExecutedAsync` registra um `TaskCallback` e, ao liberar o lock, publica no canal `cluster:task-finished` (payload `task::<taskKey>`) para completar waiters neste nó e nos demais.
+
+Residual: se o holder morrer sem unlock e o TTL do lock expirar sem publish, waiters podem aguardar até o timeout da task.
 
 ### Sticky session
 
