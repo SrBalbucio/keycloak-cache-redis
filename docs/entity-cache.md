@@ -1,62 +1,49 @@
-# Entity cache MVP (Redis)
+# Entity cache (realm/user) — removido
 
-Cache-aside de **índices de lookup** para user/realm/client, opcional e desligado por padrão.
+O cache Redis de realm/user (índices de `getRealmByName`, `getClientByClientId`, lookup de
+user por username/email) foi **removido** da extensão. As variáveis de ambiente
+`KC_CACHE_REDIS_ENTITY_ENABLED` / `KC_CACHE_REDIS_ENTITY_TTL_SECONDS` **não têm mais efeito**.
 
-> **⚠️ Incompatível com o core do Keycloak — mantenha desligado (`KC_CACHE_REDIS_ENTITY_ENABLED=false`).**
->
-> Em Keycloak 26.x, providers core como `InfinispanIdentityProviderStorageProvider` e
-> `InfinispanOrganizationProvider` fazem cast hard-coded do `CacheRealmProvider`/`UserCache`
-> para `RealmCacheSession`/`UserCacheSession` (classes Infinispan) e usam o
-> `RealmCacheManager`/`UserCacheManager` para revisionamento. Os providers do SPI
-> (`RedisCacheRealmProvider` é um `Proxy`; `RedisUserCache extends UserStorageManager`)
-> não são (nem podem ser) essas classes, logo o cast lança `ClassCastException` ao renderizar
-> a página de login (listagem de IDPs/Organizations). Veja
-> `docs/spec-authsession-and-realm-cache-fix.md` (Defeito B).
->
-> **Workaround:** deixe o entity-cache desligado; realm/user cache continuam no Infinispan
-> local. As caches de sessão (userSession, authSession, loginFailure, singleUse), pubsub,
-> authz e publicKey continuam no Redis normalmente.
+## Por que foi removido
 
-## Ativação
+Dois problemas estruturais tornavam o recurso irrecuperável sem acoplar o SPI aos internals
+do Infinispan:
 
-```bash
-KC_CACHE_REDIS_ENTITY_ENABLED=true
-KC_CACHE_REDIS_ENTITY_TTL_SECONDS=1800   # opcional, default 30min
-```
+1. **Cast incompatível (flag ligada).** Providers core do Keycloak 26.x fazem cast hard-coded
+   do `CacheRealmProvider`/`UserCache` para `RealmCacheSession`/`UserCacheSession` (classes
+   Infinispan) e usam o `RealmCacheManager`/`UserCacheManager` para revisionamento:
+   - `InfinispanIdentityProviderStorageProvider.<init>`
+   - `InfinispanOrganizationProvider.<init>`
 
-Requer a extensão Redis ativa (`KC_COMMUNITY_REDIS_CACHE_ENABLED=true`) e `KC_CACHE=local`.
+   As implementações do SPI (`RedisCacheRealmProvider` via `Proxy`; `RedisUserCache extends
+   UserStorageManager`) não podiam ser cast para essas classes concretas → `ClassCastException`
+   ao renderizar a página de login.
 
-## O que é cacheado
+2. **Sobrescrita do slot `default` (flag desligada).** As factories do SPI usavam
+   `id="default"` + `order=2`, a mesma `id` da stock `InfinispanCacheRealmProviderFactory`
+   (ordem menor). No registro, **mesmo id + ordem maior sobrescreve a stock** no slot
+   `default`. Com `isSupported=false` no runtime, a factory do SPI era filtrada e o slot
+   `default` ficava **vazio** (a stock não coexistia) → `getProvider(CacheRealmProvider.class)`
+   devolvia `null` → `NullPointerException` em `InfinispanIdentityProviderStorageProvider`.
 
-| Lookup | Chave relativa |
-|--------|----------------|
-| user by username | `entity:user-by-username:<realmId>:<username>` → userId |
-| user by email | `entity:user-by-email:<realmId>:<email>` → userId |
-| realm by name | `entity:realm-by-name:<name>` → realmId |
-| client by clientId | `entity:client-by-clientId:<realmId>:<clientId>` → client UUID |
+Ou seja, o recurso quebrava **nos dois estados** (ligado e desligado).
 
-O modelo completo continua vindo do JPA (`UserStorageManager` / providers `jpa`). O Redis só acelera a resolução id.
+## Estado atual
 
-## Invalidação
+Realm cache e user cache voltam ao Infinispan stock (local, em `KC_CACHE=local`), que é
+compatível com os casts do core. As caches de **sessão** (userSession, authSession,
+loginFailure, singleUse), pubsub, authz e publicKey continuam no Redis normalmente.
 
-- `UserCache.evict` / `clear` e `CacheRealmProvider.register*Invalidation` / `clear` limpam L1+L2 e publicam no canal `entity:invalidation`.
-- Cada nó mantém L1 em memória e escuta o PUBSUB.
+## Se um dia quiser realm/user cache no Redis
 
-## SPI
+Não basta usar `id="default"`: é preciso (a) registrar com `id` distinto (ex.: `redis`) para
+não sobrescrever a stock, e (b) fazer o provider **estender** `RealmCacheSession`/`UserCacheSession`
+reusando o `RealmCacheManager`/`UserCacheManager` real (presente mesmo em `KC_CACHE=local`).
+Isso acopla o SPI aos internals do Infinispan — custo/benefício ruim frente ao cache local, que
+já é eficiente. Veja `docs/spec-authsession-and-realm-cache-fix.md` (Defeito B).
 
-| Factory | id | order |
-|---------|-----|-------|
-| `RedisUserCacheProviderFactory` | `default` | 2 |
-| `RedisCacheRealmProviderFactory` | `default` | 2 |
+## Utilidade reaproveitável
 
-Só são `isSupported` quando `KC_CACHE_REDIS_ENTITY_ENABLED=true`.
-
-## Limitações do MVP
-
-- **Incompatível com providers core do Keycloak 26.x** (IDP, Organizations) — veja o aviso
-  no topo e o Defeito B em `docs/spec-authsession-and-realm-cache-fix.md`. Por isso deve
-  permanecer **desligado** até um reescrita (opção B2 da spec: `RedisCacheRealmProvider
-  extends RealmCacheSession` e `RedisUserCache extends UserCacheSession`).
-- Não espelha o grafo completo de roles/groups/client-scopes do Infinispan.
-- Não substitui revisões finas do `UserCacheSession` / `RealmCacheSession`.
-- Com a flag desligada, o Keycloak usa os caches locais Infinispan de entidade (comportamento anterior).
+`balbucio.keycloak.cache.redis.entity.RedisEntityIndexCache` (índice cache-aside genérico com
+L1+L2 e invalidação PUBSUB) permanece no código e tem teste próprio; pode ser reusado para
+outros fins no futuro.

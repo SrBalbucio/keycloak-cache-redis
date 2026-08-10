@@ -10,7 +10,7 @@ mais a auditoria de padrões similares nos demais adapters.
 | # | Defeito | Subsistema | Estado |
 |---|---------|-----------|--------|
 | A | NPE em `getProtocol()` no redirect de sucesso | auth-session | Corrigido |
-| B | `ClassCastException` ao listar IDPs/Organizations | realm/user cache | Workaround; fix a decidir |
+| B | `ClassCastException`/NPE ao listar IDPs/Organizations | realm/user cache | **Resolvido (B1)** |
 
 ---
 
@@ -103,26 +103,48 @@ stock (Infinispan local) e os casts passam. **Permanecem no Redis:** userSession
 authSession (com fix A), loginFailure, singleUse, pubsub, authz, publicKey e o
 datastore-routing.
 
-### Fix definitivo — opções
+### Mecanismo real (sobrescrita do slot `default`)
 
-**Opção B1 (recomendada): descontinuar o entity-cache do SPI.**
-- Remover `RedisCacheRealmProvider`/`RedisUserCache` ou mantê-los off por padrão (como hoje)
-  e documentar que cache de realm/user **não é suportado** (o core assume Infinispan).
-- Justificativa: em `KC_CACHE=local` o Infinispan local já é eficiente; o ganho marginal de
-  indexar realm/client no Redis não compensa o custo de manter compatibilidade com
-  `RealmCacheSession`/`UserCacheSession`.
+A investigação no container revelou que o recurso quebrava **nos dois estados**:
 
-**Opção B2 (se realm/user no Redis for requisito): reescrever como subclasses.**
-- `RedisCacheRealmProvider extends RealmCacheSession`, construído com um `RealmCacheManager`
-  real (presente mesmo em `KC_CACHE=local`), sobrescrevendo apenas `getRealmByName`/
-  `getClientByClientId` para usar índices Redis. `getCache()` continua retornando o
-  `RealmCacheManager` legítimo -> IDP/Organizations funcionam.
-- `RedisUserCache extends UserCacheSession` análogo, com `UserCacheManager` real.
-- Custo médio/alto; exige alcançar o `RealmCacheManager`/`UserCacheManager` do
-  Quarkus/Infinispan; testar invalidação de revisão em cluster.
+- As factories do SPI (`RedisCacheRealmProviderFactory`, `RedisUserCacheProviderFactory`)
+  usavam `id="default"` + `order=2` (`Constants.DEFAULT_PROVIDER_ID`/`PROVIDER_PRIORITY`), a
+  mesma `id` da stock `InfinispanCacheRealmProviderFactory` (ordem menor).
+- No registro, **mesmo id + ordem maior sobrescreve a stock** no slot `default` do SPI
+  `cache-realm` (e `user-cache`). Elas não coexistem.
+- Flag **ligada**: a factory do SPI vira o default → `create()` devolve o Proxy →
+  `ClassCastException` nos casts para `RealmCacheSession`/`UserCacheSession`.
+- Flag **desligada**: `isSupported=false` filtra a factory do SPI no runtime → o slot
+  `default` fica **vazio** (a stock foi sobrescrita) → `getProvider(CacheRealmProvider.class)`
+  devolve `null` → `NullPointerException` em `InfinispanIdentityProviderStorageProvider.<init>:62`.
 
-**Decisão sugerida:** B1 agora; B2 só se houver caso de uso multi-node sem Infinispan
-para realm/user.
+Nota: `cache-realm` é um SPI **público**, então a factory do SPI **não** dispara
+`KC-SERVICES0047` no log de build — a ausência do aviso não significa que a factory está fora.
+
+### Decisão: B1 (remover) — aplicado
+
+O realm/user cache Redis foi **removido** da extensão. Foram apagados:
+
+- `entity/RedisCacheRealmProviderFactory.java`
+- `entity/RedisUserCacheProviderFactory.java`
+- `entity/RedisCacheRealmProvider.java`
+- `entity/RedisUserCache.java`
+- `entity/EntityCacheConfig.java`
+
+Mantido `entity/RedisEntityIndexCache.java` (utilidade cache-aside genérica, com teste próprio).
+Realm/user cache voltam ao Infinispan local (stock) — compatível com os casts do core. As
+variáveis `KC_CACHE_REDIS_ENTITY_ENABLED`/`KC_CACHE_REDIS_ENTITY_TTL_SECONDS` não têm mais
+efeito.
+
+### Por que não B2
+
+B2 (subclasses de `RealmCacheSession`/`UserCacheSession`) resolveria o cast quando ligido,
+mas **não** resolveria a sobrescrita do slot `default` quando desligado — exigiria também
+mudar o `id` para não colidir com a stock. Além disso, acoplaria o SPI aos internals do
+Infinispan (`RealmCacheManager`/`UserCacheManager`, `InfinispanConnectionProvider`) e **não é
+validável** no harness de testes atual (que não sobe `InfinispanConnectionProvider`). O
+ganho funcional (índice name→id no Redis) é marginal frente ao cache Infinispan local.
+Custo/benefício ruim.
 
 ---
 
