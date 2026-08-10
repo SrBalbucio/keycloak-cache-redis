@@ -1,5 +1,6 @@
 package balbucio.keycloak.cache.redis.authSession;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -27,16 +28,70 @@ public class RedisAuthenticationSessionAdapter implements AuthenticationSessionM
     private final KeycloakSession session;
     private final RedisRootAuthenticationSessionAdapter parent;
     private final String tabId;
+    /**
+     * Snapshot of this tab's fields (suffix -&gt; value), captured at construction and kept in sync
+     * via write-through. This decouples reads from the live root entity so the adapter keeps
+     * returning its values after Keycloak removes the tab mid-request (see
+     * {@code TokenManager.attachAuthenticationSession} -&gt;
+     * {@code updateAuthenticationSessionAfterSuccessfulAuthentication}, which deletes the tab and
+     * then calls {@code authSession.getProtocol()} to build the success redirect). The stock
+     * Infinispan adapter gets this for free because it holds a detached entity; this flat-hash
+     * layout would otherwise return {@code null} once {@code removeTabFields} runs.
+     */
+    private final Map<String, String> fields;
 
     public RedisAuthenticationSessionAdapter(
             KeycloakSession session, RedisRootAuthenticationSessionAdapter parent, String tabId) {
         this.session = session;
         this.parent = parent;
         this.tabId = tabId;
+        this.fields = new HashMap<>(parent.getTabMap(tabId, ""));
+    }
+
+    private String field(String name) {
+        return fields.get(name);
+    }
+
+    private void field(String name, String value) {
+        if (value == null) {
+            fields.remove(name);
+        } else {
+            fields.put(name, value);
+        }
+        parent.setTabField(tabId, name, value);
+    }
+
+    private Map<String, String> fieldMap(String prefix) {
+        Map<String, String> result = new HashMap<>();
+        for (Map.Entry<String, String> e : fields.entrySet()) {
+            if (e.getKey().startsWith(prefix)) {
+                result.put(e.getKey().substring(prefix.length()), e.getValue());
+            }
+        }
+        return result;
+    }
+
+    private void mapPut(String prefix, String name, String value) {
+        if (name == null) {
+            return;
+        }
+        field(prefix + name, value);
+    }
+
+    private void mapClear(String prefix) {
+        for (String key : new ArrayList<>(fields.keySet())) {
+            if (key.startsWith(prefix)) {
+                field(key, null);
+            }
+        }
+    }
+
+    private Set<String> mapKeys(String prefix) {
+        return new HashSet<>(fieldMap(prefix).keySet());
     }
 
     String getClientUuid() {
-        return parent.getTabField(tabId, "clientUUID");
+        return field("clientUUID");
     }
 
     @Override
@@ -52,7 +107,7 @@ public class RedisAuthenticationSessionAdapter implements AuthenticationSessionM
     @Override
     public Map<String, ExecutionStatus> getExecutionStatus() {
         Map<String, ExecutionStatus> result = new HashMap<>();
-        for (Map.Entry<String, String> e : parent.getTabMap(tabId, EXECUTION_PREFIX).entrySet()) {
+        for (Map.Entry<String, String> e : fieldMap(EXECUTION_PREFIX).entrySet()) {
             result.put(e.getKey(), ExecutionStatus.valueOf(e.getValue()));
         }
         return result;
@@ -62,19 +117,19 @@ public class RedisAuthenticationSessionAdapter implements AuthenticationSessionM
     public void setExecutionStatus(String authenticator, ExecutionStatus status) {
         Objects.requireNonNull(authenticator);
         Objects.requireNonNull(status);
-        parent.putTabMap(tabId, EXECUTION_PREFIX, authenticator, status.name());
+        mapPut(EXECUTION_PREFIX, authenticator, status.name());
         touch();
     }
 
     @Override
     public void clearExecutionStatus() {
-        parent.clearTabMap(tabId, EXECUTION_PREFIX);
+        mapClear(EXECUTION_PREFIX);
         touch();
     }
 
     @Override
     public UserModel getAuthenticatedUser() {
-        String userId = parent.getTabField(tabId, "authUserId");
+        String userId = field("authUserId");
         if (userId == null) {
             return null;
         }
@@ -83,26 +138,26 @@ public class RedisAuthenticationSessionAdapter implements AuthenticationSessionM
 
     @Override
     public void setAuthenticatedUser(UserModel user) {
-        parent.setTabField(tabId, "authUserId", user == null ? null : user.getId());
+        field("authUserId", user == null ? null : user.getId());
         touch();
     }
 
     @Override
     public Set<String> getRequiredActions() {
-        return new HashSet<>(parent.getTabMap(tabId, REQUIRED_ACTION_PREFIX).keySet());
+        return mapKeys(REQUIRED_ACTION_PREFIX);
     }
 
     @Override
     public void addRequiredAction(String action) {
         Objects.requireNonNull(action);
-        parent.putTabMap(tabId, REQUIRED_ACTION_PREFIX, action, "1");
+        mapPut(REQUIRED_ACTION_PREFIX, action, "1");
         touch();
     }
 
     @Override
     public void removeRequiredAction(String action) {
         Objects.requireNonNull(action);
-        parent.putTabMap(tabId, REQUIRED_ACTION_PREFIX, action, null);
+        mapPut(REQUIRED_ACTION_PREFIX, action, null);
         touch();
     }
 
@@ -121,18 +176,18 @@ public class RedisAuthenticationSessionAdapter implements AuthenticationSessionM
         if (name == null || value == null) {
             return;
         }
-        parent.putTabMap(tabId, USER_NOTE_PREFIX, name, value);
+        mapPut(USER_NOTE_PREFIX, name, value);
         touch();
     }
 
     @Override
     public Map<String, String> getUserSessionNotes() {
-        return parent.getTabMap(tabId, USER_NOTE_PREFIX);
+        return fieldMap(USER_NOTE_PREFIX);
     }
 
     @Override
     public void clearUserSessionNotes() {
-        parent.clearTabMap(tabId, USER_NOTE_PREFIX);
+        mapClear(USER_NOTE_PREFIX);
         touch();
     }
 
@@ -141,7 +196,7 @@ public class RedisAuthenticationSessionAdapter implements AuthenticationSessionM
         if (name == null) {
             return null;
         }
-        return parent.getTabMap(tabId, AUTH_NOTE_PREFIX).get(name);
+        return field(AUTH_NOTE_PREFIX + name);
     }
 
     @Override
@@ -149,7 +204,7 @@ public class RedisAuthenticationSessionAdapter implements AuthenticationSessionM
         if (name == null || value == null) {
             return;
         }
-        parent.putTabMap(tabId, AUTH_NOTE_PREFIX, name, value);
+        mapPut(AUTH_NOTE_PREFIX, name, value);
         touch();
     }
 
@@ -158,13 +213,13 @@ public class RedisAuthenticationSessionAdapter implements AuthenticationSessionM
         if (name == null) {
             return;
         }
-        parent.putTabMap(tabId, AUTH_NOTE_PREFIX, name, null);
+        mapPut(AUTH_NOTE_PREFIX, name, null);
         touch();
     }
 
     @Override
     public void clearAuthNotes() {
-        parent.clearTabMap(tabId, AUTH_NOTE_PREFIX);
+        mapClear(AUTH_NOTE_PREFIX);
         touch();
     }
 
@@ -173,7 +228,7 @@ public class RedisAuthenticationSessionAdapter implements AuthenticationSessionM
         if (name == null) {
             return null;
         }
-        return parent.getTabMap(tabId, CLIENT_NOTE_PREFIX).get(name);
+        return field(CLIENT_NOTE_PREFIX + name);
     }
 
     @Override
@@ -181,7 +236,7 @@ public class RedisAuthenticationSessionAdapter implements AuthenticationSessionM
         if (name == null || value == null) {
             return;
         }
-        parent.putTabMap(tabId, CLIENT_NOTE_PREFIX, name, value);
+        mapPut(CLIENT_NOTE_PREFIX, name, value);
         touch();
     }
 
@@ -190,44 +245,44 @@ public class RedisAuthenticationSessionAdapter implements AuthenticationSessionM
         if (name == null) {
             return;
         }
-        parent.putTabMap(tabId, CLIENT_NOTE_PREFIX, name, null);
+        mapPut(CLIENT_NOTE_PREFIX, name, null);
         touch();
     }
 
     @Override
     public Map<String, String> getClientNotes() {
-        return parent.getTabMap(tabId, CLIENT_NOTE_PREFIX);
+        return fieldMap(CLIENT_NOTE_PREFIX);
     }
 
     @Override
     public void clearClientNotes() {
-        parent.clearTabMap(tabId, CLIENT_NOTE_PREFIX);
+        mapClear(CLIENT_NOTE_PREFIX);
         touch();
     }
 
     @Override
     public Set<String> getClientScopes() {
-        return new HashSet<>(parent.getTabMap(tabId, CLIENT_SCOPE_PREFIX).keySet());
+        return mapKeys(CLIENT_SCOPE_PREFIX);
     }
 
     @Override
     public void setClientScopes(Set<String> clientScopes) {
         Objects.requireNonNull(clientScopes);
-        parent.clearTabMap(tabId, CLIENT_SCOPE_PREFIX);
+        mapClear(CLIENT_SCOPE_PREFIX);
         for (String scope : clientScopes) {
-            parent.putTabMap(tabId, CLIENT_SCOPE_PREFIX, scope, "1");
+            mapPut(CLIENT_SCOPE_PREFIX, scope, "1");
         }
         touch();
     }
 
     @Override
     public String getRedirectUri() {
-        return parent.getTabField(tabId, "redirectUri");
+        return field("redirectUri");
     }
 
     @Override
     public void setRedirectUri(String uri) {
-        parent.setTabField(tabId, "redirectUri", uri);
+        field("redirectUri", uri);
         touch();
     }
 
@@ -243,29 +298,30 @@ public class RedisAuthenticationSessionAdapter implements AuthenticationSessionM
 
     @Override
     public String getAction() {
-        return parent.getTabField(tabId, "action");
+        return field("action");
     }
 
     @Override
     public void setAction(String action) {
-        parent.setTabField(tabId, "action", action);
+        field("action", action);
         touch();
     }
 
     @Override
     public String getProtocol() {
-        return parent.getTabField(tabId, "protocol");
+        return field("protocol");
     }
 
     @Override
     public void setProtocol(String method) {
-        parent.setTabField(tabId, "protocol", method);
+        field("protocol", method);
         touch();
     }
 
     private void touch() {
-        parent.setTabField(tabId, "timestamp", Integer.toString(Time.currentTime()));
-        parent.setTimestamp(Time.currentTime());
+        int now = Time.currentTime();
+        field("timestamp", Integer.toString(now));
+        parent.setTimestamp(now);
     }
 
     @Override

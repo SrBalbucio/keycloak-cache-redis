@@ -164,4 +164,72 @@ class RedisAuthenticationSessionProviderIntegrationTest extends AbstractRedisInt
         assertEquals(0L, conn.sync().exists(RootAuthenticationSessionKey.of(TestSessions.REALM_ID, "root-2").key()));
         assertTrue(conn.sync().smembers(AuthSessionIndexes.realmIndex(TestSessions.REALM_ID)).isEmpty());
     }
+
+    /**
+     * Reproduces the login-success NPE where {@code TokenManager.attachAuthenticationSession} ->
+     * {@code updateAuthenticationSessionAfterSuccessfulAuthentication} removes the tab and then
+     * {@code AuthenticationManager.redirectAfterSuccessfulFlow} calls {@code authSession.getProtocol()},
+     * which used to return {@code null} because the adapter was a live view over the root entity.
+     * The adapter must keep returning its fields after the tab is removed (like the stock Infinispan
+     * adapter, which holds a detached entity).
+     */
+    @Test
+    void removedTabAdapterStillExposesFields() {
+        KeycloakSession session = TestSessions.newSession(provider());
+        RealmModel realm = session.realms().getRealm(TestSessions.REALM_ID);
+        RedisAuthenticationSessionProvider provider = new RedisAuthenticationSessionProvider(session, 300);
+        ClientModel client = TestSessions.newClient("client-1");
+        TestSessions.registerClient(realm, client);
+
+        RootAuthenticationSessionModel root = provider.createRootAuthenticationSession(realm, "root-1");
+        AuthenticationSessionModel tab = root.createAuthenticationSession(client);
+        tab.setProtocol("openid-connect");
+        tab.setRedirectUri("https://app.example/cb");
+        tab.setAuthNote("step", "credentials");
+        session.getTransactionManager().commit();
+
+        // Simulate updateAuthenticationSessionAfterSuccessfulAuthentication: the tab is removed
+        // while the same adapter reference is still held by the login flow.
+        root.removeAuthenticationSessionByTabId(tab.getTabId());
+
+        assertEquals("openid-connect", tab.getProtocol());
+        assertEquals("https://app.example/cb", tab.getRedirectUri());
+        assertEquals("credentials", tab.getAuthNote("step"));
+        assertEquals(client.getId(), tab.getClient().getId());
+    }
+
+    /**
+     * Same contract as above but reloaded in a fresh session, to ensure write-through still
+     * persists protocol/notes for a tab that is removed later in the SAME request.
+     */
+    @Test
+    void writesBeforeTabRemovalArePersisted() {
+        KeycloakSession session = TestSessions.newSession(provider());
+        RealmModel realm = session.realms().getRealm(TestSessions.REALM_ID);
+        RedisAuthenticationSessionProvider provider = new RedisAuthenticationSessionProvider(session, 300);
+        ClientModel clientA = TestSessions.newClient("client-a");
+        ClientModel clientB = TestSessions.newClient("client-b");
+        TestSessions.registerClient(realm, clientA);
+        TestSessions.registerClient(realm, clientB);
+
+        RootAuthenticationSessionModel root = provider.createRootAuthenticationSession(realm, "root-1");
+        AuthenticationSessionModel tabA = root.createAuthenticationSession(clientA);
+        tabA.setProtocol("openid-connect");
+        AuthenticationSessionModel tabB = root.createAuthenticationSession(clientB);
+        tabB.setProtocol("openid-connect");
+        // Remove tabA mid-request (as the success flow does); tabB must remain and be persisted.
+        root.removeAuthenticationSessionByTabId(tabA.getTabId());
+        session.getTransactionManager().commit();
+
+        KeycloakSession session2 = TestSessions.newSession(provider());
+        RealmModel realm2 = session2.realms().getRealm(TestSessions.REALM_ID);
+        TestSessions.registerClient(realm2, clientB);
+        RedisAuthenticationSessionProvider provider2 = new RedisAuthenticationSessionProvider(session2, 300);
+        RootAuthenticationSessionModel loaded = provider2.getRootAuthenticationSession(realm2, "root-1");
+        assertNotNull(loaded);
+        assertEquals(1, loaded.getAuthenticationSessions().size());
+        AuthenticationSessionModel back = loaded.getAuthenticationSession(clientB, tabB.getTabId());
+        assertNotNull(back);
+        assertEquals("openid-connect", back.getProtocol());
+    }
 }
