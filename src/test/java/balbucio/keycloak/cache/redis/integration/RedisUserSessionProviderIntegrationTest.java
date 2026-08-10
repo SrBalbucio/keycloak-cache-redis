@@ -257,4 +257,46 @@ class RedisUserSessionProviderIntegrationTest extends AbstractRedisIntegrationTe
         assertNull(provider2.getUserSession(realm2, "s1"));
         assertEquals(0L, provider().sync().exists(UserSessionKey.of(TestSessions.REALM_ID, "s1", false).key()));
     }
+
+    /**
+     * Characterizes {@code detachFromUserSession}: the client session is removed from storage and
+     * unlinked from the user session. Note: the held adapter is marked-for-delete by the provider
+     * during detach, so reads on that same reference afterward throw {@code ModelIllegalStateException}
+     * (the SPI is fail-fast here, whereas the stock Infinispan adapter keeps returning its detached
+     * entity). Whether any core logout flow reads a detached client session is tracked as a follow-up
+     * in {@code docs/spec-authsession-and-realm-cache-fix.md} (auditoria de adapters).
+     */
+    @Test
+    void detachFromUserSessionRemovesClientSessionAndUnlinks() {
+        KeycloakSession session = TestSessions.newSession(provider());
+        RealmModel realm = session.realms().getRealm(TestSessions.REALM_ID);
+        UserModel user = session.users().getUserById(realm, TestSessions.USER_ID);
+        RedisUserSessionProvider provider = new RedisUserSessionProvider(session, 100, false);
+        ClientModel client = TestSessions.newClient("client-detach");
+        TestSessions.registerClient(realm, client);
+
+        UserSessionModel us =
+                provider.createUserSession(
+                        "sd1", realm, user, "alice", "ip", "form", false, null, null,
+                        SessionPersistenceState.PERSISTENT);
+        AuthenticatedClientSessionModel cs = provider.createClientSession(realm, client, us);
+        cs.setProtocol("openid-connect");
+        assertEquals(1, us.getAuthenticatedClientSessions().size());
+
+        cs.detachFromUserSession();
+        session.getTransactionManager().commit();
+
+        // Fresh session: the client session is unlinked from the user session and gone from storage.
+        KeycloakSession session2 = TestSessions.newSession(provider());
+        RealmModel realm2 = session2.realms().getRealm(TestSessions.REALM_ID);
+        TestSessions.registerClient(realm2, client);
+        RedisUserSessionProvider provider2 = new RedisUserSessionProvider(session2, 100, false);
+        UserSessionModel loaded = provider2.getUserSession(realm2, "sd1");
+        assertNotNull(loaded);
+        assertEquals(0, loaded.getAuthenticatedClientSessions().size());
+        assertEquals(
+                0L,
+                provider().sync().exists(AuthenticatedClientSessionKey.of(
+                        TestSessions.REALM_ID, "sd1", "client-detach", false).key()));
+    }
 }

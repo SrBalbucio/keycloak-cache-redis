@@ -24,7 +24,14 @@ Comportamentos conhecidos e restrições da implementação atual.
 
 ## Entity cache MVP
 
-- Desligado por padrão (`KC_CACHE_REDIS_ENTITY_ENABLED`). Quando ligado, só indexa lookups quentes (username/email/realm name/clientId); não há parity com o grafo Infinispan de roles/groups.
+- **Incompatível com o core do Keycloak 26.x — mantenha desligado.** Com
+  `KC_CACHE_REDIS_ENTITY_ENABLED=true`, providers core (`InfinispanIdentityProviderStorageProvider`,
+  `InfinispanOrganizationProvider`) lançam `ClassCastException` ao castar o realm/user cache
+  do SPI para `RealmCacheSession`/`UserCacheSession` (classes Infinispan). Sintoma: a página
+  de login não abre. Veja [entity-cache.md](entity-cache.md) e o Defeito B em
+  [spec-authsession-and-realm-cache-fix.md](spec-authsession-and-realm-cache-fix.md).
+- Quando ligado (não recomendado), só indexa lookups quentes
+  (username/email/realm name/clientId); não há parity com o grafo Infinispan de roles/groups.
 - Detalhes: [entity-cache.md](entity-cache.md).
 
 ## Fora do escopo atual
