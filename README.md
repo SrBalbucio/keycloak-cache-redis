@@ -124,7 +124,9 @@ Com métricas do Keycloak habilitadas (`/metrics`), a extensão registra:
 REDIS_TEST_URI=redis://127.0.0.1:6380 REDIS_TEST_ALLOW_FLUSH=true ./mvnw test
 ```
 
-CI: [.github/workflows/ci.yml](.github/workflows/ci.yml). Changelog: [CHANGELOG.md](CHANGELOG.md).
+CI: [GitHub Actions](.github/workflows/ci.yml) e [Woodpecker](.woodpecker/ci.yml).  
+Release (Woodpecker → GitHub Releases): [docs/release.md](docs/release.md).  
+Changelog: [CHANGELOG.md](CHANGELOG.md).
 
 ## Limitações
 

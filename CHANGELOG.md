@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Woodpecker CI (`.woodpecker/ci.yml`) and release deploy (`.woodpecker/release.yml` → GitHub Releases on `v*` tags).
 - GitHub Actions CI (`mvn verify` with Testcontainers Redis).
 - Apache License 2.0 and Maven Wrapper.
 - Integration tests for session, auth-session, login-failure, single-use, and cluster providers.

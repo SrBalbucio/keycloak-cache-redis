@@ -15,5 +15,6 @@ Extensão para Keycloak **26.7.1** que substitui caches distribuídos de sessão
 | [Clustering](clustering.md) | Coordenação multi-nó via PUBSUB |
 | [Métricas](metrics.md) | Contadores e latência Lettuce |
 | [Limitações](limitations.md) | Restrições conhecidas e comportamento esperado |
+| [Release](release.md) | Pipeline Woodpecker → GitHub Releases |
 
 Para um resumo operacional rápido, veja também o [README](../README.md) na raiz do repositório.

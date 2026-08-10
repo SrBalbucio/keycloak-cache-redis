@@ -1,0 +1,112 @@
+# Release deploy: builds on tag v*, verifies against Redis, publishes GitHub Release.
+#
+# Required Woodpecker secret (repository or org):
+#   github_token — GitHub PAT / fine-grained token with contents:write (releases)
+#
+# Usage:
+#   1. Update CHANGELOG.md on master
+#   2. git tag -a v1.0.0 -m "v1.0.0" && git push origin v1.0.0
+#   3. This pipeline creates the GitHub Release and uploads the JARs
+
+when:
+  - event: tag
+    ref: refs/tags/v*
+
+services:
+  - name: redis
+    image: redis:7.2-alpine
+
+steps:
+  - name: set-version
+    image: maven:3.9.9-eclipse-temurin-17
+    commands:
+      - |
+        set -eux
+        TAG="${CI_COMMIT_TAG}"
+        VERSION="${TAG#v}"
+        case "$VERSION" in
+          ''|*[!0-9A-Za-z.+-]*) echo "Invalid version from tag: $TAG"; exit 1 ;;
+        esac
+        echo "$VERSION" > .release-version
+        ./mvnw -B -q org.codehaus.mojo:versions-maven-plugin:2.18.0:set \
+          -DnewVersion="$VERSION" -DgenerateBackupPoms=false
+        ACTUAL="$(./mvnw -B -q help:evaluate -Dexpression=project.version -DforceStdout)"
+        echo "$ACTUAL" | tee .release-version
+        test "$ACTUAL" = "$VERSION"
+
+  - name: verify
+    image: maven:3.9.9-eclipse-temurin-17
+    environment:
+      REDIS_TEST_URI: redis://redis:6379
+      REDIS_TEST_ALLOW_FLUSH: "true"
+    commands:
+      - ./mvnw -B -Dredis.test.required=true verify
+
+  - name: package
+    image: maven:3.9.9-eclipse-temurin-17
+    commands:
+      - |
+        set -eux
+        VERSION="$(cat .release-version)"
+        ./mvnw -B -DskipTests package
+        test -f "target/keycloak-cache-redis-${VERSION}-withdeps.jar"
+        test -f "target/keycloak-cache-redis-${VERSION}.jar"
+        # Avoid uploading shade "original-*" intermediates
+        rm -f target/original-*.jar
+        ls -lh target/keycloak-cache-redis-"${VERSION}"*.jar
+
+  - name: release-notes
+    image: alpine:3.21
+    commands:
+      - |
+        set -eux
+        VERSION="$(cat .release-version)"
+        TAG="${CI_COMMIT_TAG}"
+        {
+          echo "## keycloak-cache-redis ${TAG}"
+          echo
+          echo "Artefato instalável no Keycloak \`providers/\`:"
+          echo
+          echo "- \`keycloak-cache-redis-${VERSION}-withdeps.jar\` (shaded Lettuce)"
+          echo
+          echo "Keycloak alvo: **26.7.1**. Docs: [README](https://github.com/${CI_REPO}/blob/${TAG}/README.md)."
+          echo
+          if [ -f CHANGELOG.md ]; then
+            echo "## Changelog"
+            echo
+            awk -v ver="$VERSION" '
+              BEGIN { p=0 }
+              /^## \[Unreleased\]/ { p=1; next }
+              /^## \[/ {
+                if ($0 ~ "\\[" ver "\\]") { p=1; next }
+                if (p) { exit }
+              }
+              p { print }
+            ' CHANGELOG.md | head -n 80
+          fi
+        } > .release-notes.md
+        cat .release-notes.md
+        # Pre-release when tag has a hyphen after the version core (v1.0.0-rc.1)
+        if echo "$TAG" | grep -Eq -- '^v[0-9].*-'; then
+          echo "PLUGIN_PRERELEASE=true" > .plugin-env
+        else
+          echo "PLUGIN_PRERELEASE=false" > .plugin-env
+        fi
+
+  - name: github-release
+    image: woodpeckerci/plugin-release:2.1.1
+    settings:
+      api-key:
+        from_secret: github_token
+      files:
+        # Installable Keycloak provider (shaded). Thin jar is not published.
+        - target/keycloak-cache-redis-*-withdeps.jar
+      file-exists: overwrite
+      checksum:
+        - sha256
+      checksum-flatten: true
+      note: .release-notes.md
+      title: ${CI_COMMIT_TAG}
+      generate-release-notes: true
+      env-file: .plugin-env
+      overwrite: true

@@ -1,0 +1,19 @@
+# Continuous integration on push/PR (Woodpecker; Redis service for ITs).
+
+when:
+  - event: push
+    branch: [master]
+  - event: pull_request
+
+services:
+  - name: redis
+    image: redis:7.2-alpine
+
+steps:
+  - name: test
+    image: maven:3.9.9-eclipse-temurin-17
+    environment:
+      REDIS_TEST_URI: redis://redis:6379
+      REDIS_TEST_ALLOW_FLUSH: "true"
+    commands:
+      - ./mvnw -B -Dredis.test.required=true verify

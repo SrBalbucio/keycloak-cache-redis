@@ -26,8 +26,11 @@ public abstract class AbstractRedisIntegrationTest {
     }
 
     private static boolean isCi() {
-        return "true".equalsIgnoreCase(System.getenv("CI"))
-                || "true".equalsIgnoreCase(System.getenv("GITHUB_ACTIONS"));
+        String ci = System.getenv("CI");
+        return ci != null
+                && !ci.isBlank()
+                && !"false".equalsIgnoreCase(ci)
+                && !"0".equals(ci);
     }
 
     @BeforeEach
