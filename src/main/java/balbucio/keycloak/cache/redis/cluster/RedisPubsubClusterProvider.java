@@ -142,16 +142,12 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
                     publisher.set(lockKey, taskId, SetArgs.Builder.nx().ex(lifespanSeconds));
             if ("OK".equals(lockResult)) {
                 try {
-                    try {
-                        T result = task.call();
-                        return ExecutionResult.executed(result);
-                    } catch (RuntimeException re) {
-                        throw re;
-                    } catch (Exception e) {
-                        throw new RuntimeException("Unexpected exception when executed task " + taskKey, e);
-                    }
-                } finally {
-                    publisher.del(lockKey);
+                    T result = task.call();
+                    return ExecutionResult.executed(result);
+                } catch (RuntimeException re) {
+                    throw re;
+                } catch (Exception e) {
+                    throw new RuntimeException("Unexpected exception when executed task " + taskKey, e);
                 }
             }
         } catch (Exception e) {

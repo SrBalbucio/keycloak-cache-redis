@@ -2,6 +2,7 @@ package balbucio.keycloak.cache.redis.loginFailure;
 
 import balbucio.keycloak.cache.redis.MapEntity;
 import balbucio.keycloak.cache.redis.common.TimeAdapter;
+import org.keycloak.common.util.Time;
 import org.keycloak.models.UserLoginFailureModel;
 
 public class RedisUserLoginFailureAdapter extends MapEntity implements UserLoginFailureModel {
@@ -59,6 +60,7 @@ public class RedisUserLoginFailureAdapter extends MapEntity implements UserLogin
     @Override
     public void incrementFailures() {
         increment(NUM_FAILURES, 1);
+        set(LAST_FAILURE, Long.toString(Time.currentTimeMillis()));
     }
 
     @Override

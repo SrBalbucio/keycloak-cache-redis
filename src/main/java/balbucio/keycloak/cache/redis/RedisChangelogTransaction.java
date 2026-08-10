@@ -34,7 +34,7 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
     private final Function<A, Collection<IndexUpdate>> indexFunction;
 
     private final Map<K, A> cache = new LinkedHashMap<>();
-    private final Map<K, A> toDelete = new LinkedHashMap<>();
+    private final Map<K, PendingDelete<K, A>> toDelete = new LinkedHashMap<>();
 
     public RedisChangelogTransaction(
             KeycloakSession session,
@@ -141,13 +141,16 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
             cache.remove(key);
         }
         if (entity != null) {
+            // snapshot index removals before the adapter is marked for delete, since index
+            // functions may read fields that are no longer readable once deleted
+            List<IndexUpdate> removals = new ArrayList<>(indexFunction.apply(entity));
             entity.markForDelete();
-            toDelete.put(key, entity);
+            toDelete.put(key, new PendingDelete<>(entity, removals));
         } else {
             // ensure key is removed even if not loaded
             MapEntity tombstone = MapEntity.createNew();
             tombstone.markForDelete();
-            toDelete.put(key, adapterSupplier.create(key, tombstone));
+            toDelete.put(key, new PendingDelete<>(adapterSupplier.create(key, tombstone), List.of()));
         }
     }
 
@@ -164,9 +167,9 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
             runIndexBatch(
                     sync,
                     () -> {
-                        for (Map.Entry<K, A> e : toDelete.entrySet()) {
+                        for (Map.Entry<K, PendingDelete<K, A>> e : toDelete.entrySet()) {
                             sync.del(e.getKey().key());
-                            for (IndexUpdate index : indexFunction.apply(e.getValue())) {
+                            for (IndexUpdate index : e.getValue().indexRemovals()) {
                                 if (index.member() != null) {
                                     sync.srem(index.indexKey(), index.member());
                                 }
@@ -285,4 +288,6 @@ public class RedisChangelogTransaction<K extends Key, A extends MapEntity> exten
     }
 
     public record IndexUpdate(String indexKey, String member) {}
+
+    private record PendingDelete<K, A>(A entity, List<IndexUpdate> indexRemovals) {}
 }
