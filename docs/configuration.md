@@ -53,14 +53,15 @@ Se `NODES` estiver vazio, authz usa o connection `default`.
 |----------|-----------|---------|
 | `KC_SPI_USER_SESSIONS_INFINISPAN_PERSIST_OFFLINE_SESSIONS` | Write-through JPA + preload offline no boot | `false` |
 
-### Entity cache MVP
+### Entity cache (removido)
 
-| Variável | Descrição | Default |
-|----------|-----------|---------|
-| `KC_CACHE_REDIS_ENTITY_ENABLED` | Liga UserCache/CacheRealm Redis (índices) | `false` |
-| `KC_CACHE_REDIS_ENTITY_TTL_SECONDS` | TTL dos índices | `1800` |
+O realm/user cache Redis foi **removido** — era incompatível com providers core do Keycloak
+(`InfinispanIdentityProviderStorageProvider`, `InfinispanOrganizationProvider`), que fazem
+cast hard-coded para `RealmCacheSession`/`UserCacheSession`. As variáveis
+`KC_CACHE_REDIS_ENTITY_ENABLED` / `KC_CACHE_REDIS_ENTITY_TTL_SECONDS` **não têm mais efeito**.
+Realm/user cache continuam no Infinispan local (stock). Detalhes: [entity-cache.md](entity-cache.md).
 
-Detalhes dos modos: [Conexão Redis](connection.md). Entity cache: [entity-cache.md](entity-cache.md).
+Detalhes dos modos: [Conexão Redis](connection.md).
 
 ## Authentication sessions
 

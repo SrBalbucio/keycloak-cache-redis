@@ -22,10 +22,15 @@ Comportamentos conhecidos e restrições da implementação atual.
 - Locks async (`executeIfNotExecutedAsync`) completam via PUBSUB `cluster:task-finished`. Se o holder morrer sem unlock, waiters podem timeout quando o TTL do lock expira sem publish.
 - Sticky session é desnecessária e está desabilitada pelo shim da extensão.
 
-## Entity cache MVP
+## Entity cache (realm/user)
 
-- Desligado por padrão (`KC_CACHE_REDIS_ENTITY_ENABLED`). Quando ligado, só indexa lookups quentes (username/email/realm name/clientId); não há parity com o grafo Infinispan de roles/groups.
-- Detalhes: [entity-cache.md](entity-cache.md).
+- **Removido.** O realm/user cache Redis era incompatível com providers core do Keycloak
+  (cast hard-coded para `RealmCacheSession`/`UserCacheSession`) e, quando desligado,
+  sobrescrevia o slot `default` da stock e deixava `getProvider(CacheRealmProvider.class)`
+  nulo. As variáveis `KC_CACHE_REDIS_ENTITY_ENABLED`/`KC_CACHE_REDIS_ENTITY_TTL_SECONDS` não
+  têm mais efeito. Realm/user cache voltam ao Infinispan local (stock).
+- Detalhes e o mecanismo completo: [entity-cache.md](entity-cache.md) e o Defeito B em
+  [spec-authsession-and-realm-cache-fix.md](spec-authsession-and-realm-cache-fix.md).
 
 ## Fora do escopo atual
 
