@@ -23,7 +23,7 @@ steps:
       - |
         set -eux
         TAG="${CI_COMMIT_TAG}"
-        VERSION="${TAG#v}"
+        VERSION="${CI_COMMIT_TAG##v}"
         case "$VERSION" in
           ''|*[!0-9A-Za-z.+-]*) echo "Invalid version from tag: $TAG"; exit 1 ;;
         esac
@@ -49,11 +49,11 @@ steps:
         set -eux
         VERSION="$(cat .release-version)"
         ./mvnw -B -DskipTests package
-        test -f "target/keycloak-cache-redis-${VERSION}-withdeps.jar"
-        test -f "target/keycloak-cache-redis-${VERSION}.jar"
+        test -f "target/keycloak-cache-redis-$VERSION-withdeps.jar"
+        test -f "target/keycloak-cache-redis-$VERSION.jar"
         # Avoid uploading shade "original-*" intermediates
         rm -f target/original-*.jar
-        ls -lh target/keycloak-cache-redis-"${VERSION}"*.jar
+        ls -lh target/keycloak-cache-redis-"$VERSION"*.jar
 
   - name: release-notes
     image: alpine:3.21
@@ -63,13 +63,13 @@ steps:
         VERSION="$(cat .release-version)"
         TAG="${CI_COMMIT_TAG}"
         {
-          echo "## keycloak-cache-redis ${TAG}"
+          echo "## keycloak-cache-redis $TAG"
           echo
           echo "Artefato instalável no Keycloak \`providers/\`:"
           echo
-          echo "- \`keycloak-cache-redis-${VERSION}-withdeps.jar\` (shaded Lettuce)"
+          echo "- \`keycloak-cache-redis-$VERSION-withdeps.jar\` (shaded Lettuce)"
           echo
-          echo "Keycloak alvo: **26.7.1**. Docs: [README](https://github.com/${CI_REPO}/blob/${TAG}/README.md)."
+          echo "Keycloak alvo: **26.7.1**. Docs: [README](https://github.com/${CI_REPO}/blob/$TAG/README.md)."
           echo
           if [ -f CHANGELOG.md ]; then
             echo "## Changelog"
