@@ -94,7 +94,7 @@ steps:
         fi
 
   - name: github-release
-    image: woodpeckerci/plugin-release:2.1.1
+    image: woodpeckerci/plugin-release:0.3.1
     settings:
       api-key:
         from_secret: github_access_token
