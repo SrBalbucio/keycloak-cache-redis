@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.exc.InvalidTypeIdException;
 
 import java.lang.reflect.Constructor;
@@ -238,6 +239,29 @@ class ClusterEventSerializerTest {
                 {"eventKey":"k","events":[{"@class":"java.util.HashMap","a":1}],"ignoreSender":true,"dcNotify":"ALL_DCS","senderId":"n1"}
                 """;
         assertThrows(InvalidTypeIdException.class, () -> ClusterEventSerializer.deserialize(json));
+    }
+
+    /**
+     * CHARACTERIZED forward-incompatibility: unknown fields added by a newer provider version
+     * make the whole message fail deserialization (FAILS_ON_UNKNOWN_PROPERTIES is on), so a
+     * mixed-version cluster drops those messages instead of ignoring the unknown fields.
+     */
+    @Test
+    void unknownExtraFieldsOnEventAreRejected() {
+        String json =
+                """
+                {"eventKey":"k","events":[{"@class":"org.keycloak.models.cache.infinispan.events.ClientAddedEvent","id":"c1","realmId":"r1","futureFlag":true}],"ignoreSender":true,"dcNotify":"ALL_DCS","senderId":"n1"}
+                """;
+        assertThrows(JsonProcessingException.class, () -> ClusterEventSerializer.deserialize(json));
+    }
+
+    @Test
+    void unknownExtraFieldsOnEnvelopeAreRejected() {
+        String json =
+                """
+                {"eventKey":"k","events":[],"ignoreSender":true,"dcNotify":"ALL_DCS","senderId":"n1","futureEnvelopeField":1}
+                """;
+        assertThrows(JsonProcessingException.class, () -> ClusterEventSerializer.deserialize(json));
     }
 
     @Test
