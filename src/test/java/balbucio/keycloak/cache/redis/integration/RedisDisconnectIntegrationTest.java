@@ -31,6 +31,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Tags;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.keycloak.models.KeycloakSession;
@@ -45,7 +46,7 @@ import org.testcontainers.utility.DockerImageName;
  * one): operations must fail fast while Redis is unreachable, Lettuce must reconnect on its own
  * once Redis is back, and sessions written before the outage must survive a pause.
  */
-@Tag("chaos")
+@Tags({@Tag("chaos"), @Tag("docker")})
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class RedisDisconnectIntegrationTest extends AbstractRedisIntegrationTest {
 

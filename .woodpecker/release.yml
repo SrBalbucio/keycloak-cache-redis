@@ -40,7 +40,7 @@ steps:
       REDIS_TEST_URI: redis://redis:6379
       REDIS_TEST_ALLOW_FLUSH: "true"
     commands:
-      - ./mvnw -B -Dredis.test.required=true verify
+      - ./mvnw -B -Dredis.test.required=true -DexcludedGroups=docker verify
 
   - name: package
     image: maven:3.9.9-eclipse-temurin-17
