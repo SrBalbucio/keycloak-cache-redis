@@ -1,7 +1,7 @@
 [![status-badge](https://woodpecker.internal.hyperpowered.net/api/badges/8/status.svg)](https://woodpecker.internal.hyperpowered.net/repos/8)
 # keycloak-cache-redis
 
-Extensão para Keycloak **26.7.1** que substitui caches distribuídos de sessão (Infinispan) por **Redis/Valkey**, via SPI
+Extensão para Keycloak **26.x.x** que substitui caches distribuídos de sessão (Infinispan) por **Redis/Valkey**, via SPI
 (`DatastoreProvider` + providers `infinispan`), usando **Lettuce**. Inclui cache-aside para Authorization Services.
 
 **Regiões no Redis:** `userSessions`, `authenticationSessions`, `loginFailures`, `singleUseObjects`.
