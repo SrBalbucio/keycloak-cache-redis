@@ -38,11 +38,18 @@ public final class LettuceRedisClientSupport {
     private String keyPrefix = "";
     private ClientResources clientResources;
     private boolean configureGlobalKeySpace;
+    private List<RedisURI> redisUris = List.of();
 
     public LettuceRedisClientSupport(boolean configureGlobalKeySpace) {
         this.configureGlobalKeySpace = configureGlobalKeySpace;
     }
 
+    /**
+     * Parses and validates configuration WITHOUT opening any connection. Boot must never die
+     * because Redis is momentarily unreachable (DNS outage, Redis restarting): the first TCP
+     * connect + {@code SCRIPT LOAD} happen lazily on first use ({@link #ensureConnected()}),
+     * where the failure surfaces per-request and recovers via Lettuce reconnect.
+     */
     public void init(Config.Scope config, String envNamePrefix) {
         mode = RedisMode.from(config.get("mode", "standalone"));
 
@@ -84,34 +91,51 @@ public final class LettuceRedisClientSupport {
         }
 
         clientResources = buildClientResources();
-        List<RedisURI> redisUris =
+        redisUris =
                 buildUris(mode, hosts, ssl, sslVerifyPeer, username, password, timeout, database, masterName);
 
-        switch (mode) {
-            case CLUSTER -> initCluster(redisUris);
-            case SENTINEL, STANDALONE -> initStandaloneOrSentinel(redisUris);
-        }
-
-        casScriptSha = RedisHashCas.load(sync);
         LOG.infof(
-                "Redis connection initialized (mode=%s, nodes=%s, database=%d, keyPrefix='%s')",
+                "Redis connection configured (mode=%s, nodes=%s, database=%d, keyPrefix='%s'); TCP connect is lazy on first use",
                 mode, nodes, mode == RedisMode.CLUSTER ? 0 : database, keyPrefix);
+    }
+
+    /** Opens the TCP connection(s) on first use. Synchronized: exactly one connect attempt at a time. */
+    private synchronized void ensureConnected() {
+        if (sync != null) {
+            return;
+        }
+        try {
+            switch (mode) {
+                case CLUSTER -> initCluster(redisUris);
+                case SENTINEL, STANDALONE -> initStandaloneOrSentinel(redisUris);
+            }
+
+            casScriptSha = RedisHashCas.load(sync);
+        } catch (RuntimeException e) {
+            // Drop partial state so the next use retries from scratch (no leaked half-open client).
+            dropConnections();
+            throw e;
+        }
+        LOG.infof("Redis connection initialized (mode=%s, keyPrefix='%s')", mode, keyPrefix);
     }
 
     public RedisConnectionProvider asProvider() {
         return new RedisConnectionProvider() {
             @Override
             public RedisSync sync() {
+                ensureConnected();
                 return sync;
             }
 
             @Override
             public RedisAsync async() {
+                ensureConnected();
                 return async;
             }
 
             @Override
             public StatefulRedisPubSubConnection<String, String> connectPubSub() {
+                ensureConnected();
                 return openPubSub();
             }
 
@@ -127,6 +151,7 @@ public final class LettuceRedisClientSupport {
 
             @Override
             public String casScriptSha() {
+                ensureConnected();
                 return casScriptSha;
             }
 
@@ -138,21 +163,38 @@ public final class LettuceRedisClientSupport {
     }
 
     public void close() {
-        if (connection != null) {
-            connection.close();
-            connection = null;
-        }
-        if (clusterConnection != null) {
-            clusterConnection.close();
-            clusterConnection = null;
-        }
-        if (client != null) {
-            client.shutdown();
-            client = null;
-        }
+        dropConnections();
         if (clientResources != null) {
             clientResources.shutdown();
             clientResources = null;
+        }
+    }
+
+    /** Best-effort drop of live connections; keeps config + clientResources for a later retry. */
+    private void dropConnections() {
+        if (connection != null) {
+            try {
+                connection.close();
+            } catch (Exception ignored) {
+                // ignore
+            }
+            connection = null;
+        }
+        if (clusterConnection != null) {
+            try {
+                clusterConnection.close();
+            } catch (Exception ignored) {
+                // ignore
+            }
+            clusterConnection = null;
+        }
+        if (client != null) {
+            try {
+                client.shutdown();
+            } catch (Exception ignored) {
+                // ignore
+            }
+            client = null;
         }
         sync = null;
         async = null;
