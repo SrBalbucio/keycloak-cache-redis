@@ -13,6 +13,7 @@ Extensão para Keycloak **26.7.1** que substitui caches distribuídos de sessão
 | [Sessões](sessions.md) | User sessions, auth sessions, login failures, single-use |
 | [Authorization](authorization.md) | Cache-aside das Authorization Services |
 | [Clustering](clustering.md) | Coordenação multi-nó via PUBSUB |
+| [Cache API](cache-api.md) | SPI público `redisCache` para outras extensões (namespaces, TTL, LRU + invalidação) |
 | [Matriz de eventos](cluster-event-matrix.md) | eventKey → emissor/listener → cache local (Fase 0) |
 | [Baseline multinó](cluster-baseline.md) | Roteiro de medição + SLO do cluster bus (Fase 0) |
 | [Métricas](metrics.md) | Contadores e latência Lettuce |

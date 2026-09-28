@@ -56,6 +56,8 @@ public final class RedisMetrics {
         public static final String PUBLIC_KEYS = "publicKeys";
         public static final String ENTITY = "entity";
         public static final String GENERIC = "generic";
+        /** Public {@code redisCache} SPI for third-party extensions. */
+        public static final String CACHE_API = "cacheApi";
 
         private Cache() {}
     }
