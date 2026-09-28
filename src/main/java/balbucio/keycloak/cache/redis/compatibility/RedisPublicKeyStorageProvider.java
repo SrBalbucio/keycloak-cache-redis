@@ -183,8 +183,13 @@ public class RedisPublicKeyStorageProvider implements PublicKeyStorageProvider {
         return RedisKeySpace.key(KEY_PREFIX_RELATIVE + modelKey);
     }
 
+    /**
+     * Intentionally a no-op: {@code localL1} is the factory-shared map and {@code connection}
+     * is factory-owned. {@code DefaultKeycloakSession.close()} closes session-created providers,
+     * so clearing here would wipe the shared L1 on every request. Invalidated explicitly via
+     * {@link #clearLocal(String)} (PUBSUB) and on reconnect; dropped wholesale in
+     * {@code MapPublicKeyStorageProviderFactory.close()}.
+     */
     @Override
-    public void close() {
-        localL1.clear();
-    }
+    public void close() {}
 }

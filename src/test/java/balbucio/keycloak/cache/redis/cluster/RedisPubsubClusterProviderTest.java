@@ -1,10 +1,13 @@
 package balbucio.keycloak.cache.redis.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import balbucio.keycloak.cache.redis.RedisMetrics;
@@ -87,9 +90,9 @@ class RedisPubsubClusterProviderTest {
             executor.shutdownNow();
         }
     }
-
     @Test
     void clusterReconnectListenerOnlyObserves() {
+
         RedisSync sync = mock(RedisSync.class);
         ExecutorService executor = Executors.newCachedThreadPool();
         RedisPubsubClusterProvider provider = provider(sync, executor);
@@ -114,14 +117,70 @@ class RedisPubsubClusterProviderTest {
         }
     }
 
+    /**
+     * Regressão do bug em que {@code DefaultKeycloakSession.close()} (inclusive no bootstrap,
+     * ~1s após o boot) fechava o ClusterProvider compartilhado e matava a subscrição PUBSUB
+     * do nó inteiro sem logs. {@code close()} do provider é no-op (como o stock); o ciclo de
+     * vida do subscriber pertence à factory.
+     */
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void sessionCloseMustNotKillSharedSubscription() {
+        RedisSync sync = mock(RedisSync.class);
+        ExecutorService executor = Executors.newCachedThreadPool();
+        ProviderWithSubscriber holder =
+                providerWithSubscriber(sync, executor, mock(StatefulRedisPubSubConnection.class));
+        try {
+            holder.provider().close();
+
+            verify(holder.subscriber(), never()).close();
+            verify(holder.commands(), never()).unsubscribe(any(String[].class));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void factoryCloseStillReleasesSubscriber() {
+        RedisSync sync = mock(RedisSync.class);
+        ExecutorService executor = Executors.newCachedThreadPool();
+        ProviderWithSubscriber holder =
+                providerWithSubscriber(sync, executor, mock(StatefulRedisPubSubConnection.class));
+        try {
+            holder.provider().closeSubscriber();
+
+            verify(holder.commands()).unsubscribe(any(String[].class));
+            verify(holder.subscriber()).close();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static RedisPubsubClusterProvider provider(RedisSync sync, ExecutorService executor) {
-        StatefulRedisPubSubConnection<String, String> subscriber =
-                mock(StatefulRedisPubSubConnection.class);
+        return providerWithSubscriber(sync, executor, mock(StatefulRedisPubSubConnection.class))
+                .provider();
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static ProviderWithSubscriber providerWithSubscriber(
+            RedisSync sync,
+            ExecutorService executor,
+            StatefulRedisPubSubConnection<String, String> subscriber) {
         RedisPubSubCommands<String, String> commands = mock(RedisPubSubCommands.class);
         when(subscriber.sync()).thenReturn(commands);
-        return new RedisPubsubClusterProvider(sync, subscriber, 100, executor, "node-test");
+        when(subscriber.isOpen()).thenReturn(true);
+        return new ProviderWithSubscriber(
+                new RedisPubsubClusterProvider(sync, subscriber, 100, executor, "node-test"),
+                subscriber,
+                commands);
     }
+
+    private record ProviderWithSubscriber(
+            RedisPubsubClusterProvider provider,
+            StatefulRedisPubSubConnection<String, String> subscriber,
+            RedisPubSubCommands<String, String> commands) {}
 
     private static double clusterEventCount(String eventKey, String outcome) {
         Optional<Meter> meter =

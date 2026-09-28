@@ -324,8 +324,23 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
         return existing == null ? callback : existing;
     }
 
+    /**
+     * Intentionally a no-op, mirroring stock {@code InfinispanClusterProvider.close()}.
+     *
+     * <p>The provider instance is shared across sessions (created once in the factory) and
+     * {@code DefaultKeycloakSession.close()} closes every provider created within a session —
+     * including bootstrap sessions closed ~1s after boot. Closing the subscriber here would
+     * silently kill cross-node invalidation for the whole node while the factory keeps
+     * returning the dead instance. Subscriber lifecycle belongs to
+     * {@link RedisPubsubClusterProviderFactory#close()}.
+     */
     @Override
     public void close() {
+        LOG.debugf("Ignoring session-scoped close of shared ClusterProvider (node=%s)", nodeId);
+    }
+
+    /** Closes the shared subscriber. Called only by the factory at server shutdown. */
+    void closeSubscriber() {
         try {
             if (subscriber != null && subscriber.isOpen()) {
                 PubSubReconnect.detach(subscriber, reconnectListener);

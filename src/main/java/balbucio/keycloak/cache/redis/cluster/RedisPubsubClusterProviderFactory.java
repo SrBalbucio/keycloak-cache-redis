@@ -27,7 +27,7 @@ public class RedisPubsubClusterProviderFactory implements ClusterProviderFactory
 
     static final String CLUSTER_START_RELATIVE = "cluster:startTime";
 
-    private volatile ClusterProvider clusterProvider;
+    private volatile RedisPubsubClusterProvider clusterProvider;
     private StatefulRedisPubSubConnection<String, String> subscriber;
     private final String nodeId = UUID.randomUUID().toString();
 
@@ -99,7 +99,7 @@ public class RedisPubsubClusterProviderFactory implements ClusterProviderFactory
     public void close() {
         try {
             if (clusterProvider != null) {
-                clusterProvider.close();
+                clusterProvider.closeSubscriber();
                 clusterProvider = null;
             }
             subscriber = null;
