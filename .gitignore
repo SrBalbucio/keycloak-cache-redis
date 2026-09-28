@@ -39,3 +39,14 @@ build/
 .DS_Store
 
 SPEC_**.md
+# scratch de debug local (cookies, jars, dumps)
+*jar
+ssoh*.txt
+lbh*.txt
+ssobody*.bin
+lbform.bin
+cookie_*
+verifier.txt
+cs_before.txt
+tok*.json
+hdrs.txt

@@ -30,6 +30,16 @@ services:
     volumes:
       - valkey_data:/data
 
+  lb:
+    image: nginx:1.27-alpine
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./lb-nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - keycloak-1
+      - keycloak-2
+
   keycloak-1:
     image: quay.io/keycloak/keycloak:26.7.1
     volumes:
@@ -49,7 +59,7 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
       KC_HTTP_PORT: "8080"
       KC_HOSTNAME: localhost
-      KC_HOSTNAME_PORT: "8080"
+      KC_HOSTNAME_PORT: "8090"
       KC_HOSTNAME_STRICT: "false"
       KC_PROXY_HEADERS: xforwarded
       KC_LOG_LEVEL: INFO,balbucio.keycloak.cache.redis:DEBUG
@@ -82,7 +92,7 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
       KC_HTTP_PORT: "8081"
       KC_HOSTNAME: localhost
-      KC_HOSTNAME_PORT: "8081"
+      KC_HOSTNAME_PORT: "8090"
       KC_HOSTNAME_STRICT: "false"
       KC_PROXY_HEADERS: xforwarded
       KC_LOG_LEVEL: INFO,balbucio.keycloak.cache.redis:DEBUG

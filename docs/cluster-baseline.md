@@ -15,32 +15,40 @@ mvn clean package -DskipTests
 docker compose -f docker-compose.multinode.yml up
 ```
 
-- Nó 1: http://localhost:8080 (admin/admin) · métricas http://localhost:9000/metrics
-- Nó 2: http://localhost:8081 · métricas http://localhost:9002/metrics
+- Console/SSO: http://localhost:8090 (via LB nginx, round-robin sem sticky)
+- Direto por nó (debug/métricas): :8080 (nó 1, metrics :9000) e :8081 (nó 2, metrics :9002)
 - Os dois nós compartilham **o mesmo Postgres e o mesmo Valkey**: sessões, entidades e
   chaves de realm são comuns — continuidade de sessão e convergência de entidades são
-  observáveis de verdade. (Antes o compose usava um H2 por nó, o que impedia qualquer
-  SSO cross-node: UUIDs de usuário e chaves de realm diferentes por banco.)
+  observáveis de verdade.
 - Primeiro boot roda a migração do banco (~1 min); aguarde os dois "started".
+
+> **Por que o LB?** O cookie de identidade carrega `iss` da URL frontend e o Keycloak o
+> valida contra a URL do nó que atende. Com uma porta por nó (`:8080` vs `:8081`), o SSO
+> cross-node é impossível por design (não é bug do SPI — vale para o stock também). O LB
+> dá uma URL única (`:8090`), como em produção. Fluxos browser **sempre** pelo `:8090`;
+> tokens emitidos ali valem nos dois nós. Medições diretas por nó quebravam com 401
+> (parece "stale com valor nulo" — não é).
 
 ## Cenários
 
 ### A. Sanidade de sessão (prova que Redis é fonte da verdade)
 
-1. Login no nó 1 (conta `admin` ou usuário de teste).
-2. Requisitar recurso/sessão no nó 2 sem novo login.
-3. Esperado: sessão válida nos dois nós, sem sticky.
-
-### B. Propagação realm/client/role/group/user (o que a Fase 0 mede)
+1. Login no console via http://localhost:8090 (`admin`/`admin`).
+2. Nova aba no mesmo navegador, mesmo endereço: entra **direto, sem login** (SSO; verificado
+   via curl em 2026-09-28: 3/3 SSO silenciosos, mesma sessão).
+3. Bônus failover: `docker compose -f docker-compose.multinode.yml stop keycloak-1` e recarregue
+   o console — segue funcionando via nó 2 (sessão no Redis, sem sticky). Depois
+   `start keycloak-1`.
+4. Esperado: sessão válida independente do nó que atende (o LB alterna a cada request).
 
 ### B. Propagação realm/client/role/group/user (o que a Fase 0 mede)
 
 Funcional + transporte (DB compartilhado — a convergência é observável de verdade).
 
-> ⚠️ **Tokens são por nó.** O `iss` do token inclui a porta (`:8080` vs `:8081`); um token
-> do nó 1 no nó 2 dá **401** cujo JSON não tem `displayName` — parece "stale com valor
-> nulo", mas é só auth falhada. Gere um token em cada nó e use cada um no seu nó.
-> Verificado em 2026-09-28: PUT no nó 1 → GET no nó 2 com token do nó 2 convergiu em ≤2s.
+> Tokens/API sempre pelo `:8090` (via LB): o `iss` é único e vale nos dois nós. Medir
+> direto por nó (`:8080`/`:8081`) quebra com 401 por issuer mismatch — parece "stale com
+> valor nulo", mas é só auth falhada.
+> Verificado em 2026-09-28: PUT → GET no outro nó convergiu em ≤2s.
 
 1. Snapshot antes: `curl -s localhost:9000/metrics | grep vendor_lettuce_cluster_events`
    (nó 1) e o mesmo no `:9002` (nó 2). Anote os valores por `eventKey`/`outcome`.
