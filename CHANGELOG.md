@@ -7,12 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+## [2.1.0] - 2026-09-28
 
-- Public `redisCache` SPI (`RedisCacheProvider`, factory id `redis`) so other Keycloak
-  extensions can share this extension's Redis as a namespaced cache: String/JSON values,
-  per-entry TTL, cache-aside `getOrLoad`, optional node-local LRU with cross-node PUBSUB
-  invalidation, fail-open reads. See `docs/cache-api.md`.
+Public `redisCache` SPI for other Keycloak extensions (`RedisCacheProvider`, factory id
+`redis`): namespaced String/JSON cache with per-entry TTL, cache-aside `getOrLoad`,
+optional node-local LRU with cross-node PUBSUB invalidation (+ reconnect resync),
+fail-open reads, type-guarded gets. See `docs/cache-api.md`.
 
 ## [2.0.0] - 2026-09-28
 
