@@ -49,3 +49,11 @@ Comportamentos conhecidos e restrições da implementação atual.
 - `KC_CACHE=local` é obrigatório.
 - `KC_COMMUNITY_REDIS_CACHE_ENABLED=true` (ou a system property equivalente) é obrigatório para ativar os providers.
 - Keycloak alvo: **26.7.1**.
+- Boot resiliente: a conexão Redis é lazy (só conecta no primeiro uso), então o `init` das
+  factories nunca derruba o boot por Redis inalcançável; a falha aparece por request até o
+  Redis voltar (reconnect automático). Exceção herdada: o registro de listeners do core no
+  post-migration resolve o `ClusterProvider` — outage exatamente nessa janela ainda pode
+  falhar a inicialização.
+- Lifecycle: o `ClusterProvider` compartilhado ignora `close()` de sessão (como o stock);
+  só a factory o desliga no shutdown. Fechar o subscriber no `close()` do provider matava a
+  invalidação cross-node ~1s após o boot sem nenhum log (bug corrigido; regressão coberta).

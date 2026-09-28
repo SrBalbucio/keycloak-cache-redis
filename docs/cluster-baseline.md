@@ -16,7 +16,7 @@ docker compose -f docker-compose.multinode.yml up
 ```
 
 - Nó 1: http://localhost:8080 (admin/admin) · métricas http://localhost:9000/metrics
-- Nó 2: http://localhost:8081 · métricas http://localhost:9001/metrics
+- Nó 2: http://localhost:8081 · métricas http://localhost:9002/metrics
 - Os dois nós compartilham **o mesmo Postgres e o mesmo Valkey**: sessões, entidades e
   chaves de realm são comuns — continuidade de sessão e convergência de entidades são
   observáveis de verdade. (Antes o compose usava um H2 por nó, o que impedia qualquer
@@ -37,8 +37,13 @@ docker compose -f docker-compose.multinode.yml up
 
 Funcional + transporte (DB compartilhado — a convergência é observável de verdade).
 
+> ⚠️ **Tokens são por nó.** O `iss` do token inclui a porta (`:8080` vs `:8081`); um token
+> do nó 1 no nó 2 dá **401** cujo JSON não tem `displayName` — parece "stale com valor
+> nulo", mas é só auth falhada. Gere um token em cada nó e use cada um no seu nó.
+> Verificado em 2026-09-28: PUT no nó 1 → GET no nó 2 com token do nó 2 convergiu em ≤2s.
+
 1. Snapshot antes: `curl -s localhost:9000/metrics | grep vendor_lettuce_cluster_events`
-   (nó 1) e o mesmo no `:9001` (nó 2). Anote os valores por `eventKey`/`outcome`.
+   (nó 1) e o mesmo no `:9002` (nó 2). Anote os valores por `eventKey`/`outcome`.
 2. No nó 1 (Admin Console): alterar displayName do realm + Save; criar um client; criar uma
    role; atualizar um atributo de usuário. Cada escrita emite invalidações
    (`REALM_INVALIDATION_EVENTS`, `USER_INVALIDATION_EVENTS`, ...).
@@ -77,7 +82,7 @@ Funcional + transporte (DB compartilhado — a convergência é observável de v
 
 Sem provocação manual: consulte
 `vendor_lettuce_cluster_task_seconds_count{outcome="timeout"}` nos dois nós
-(`:9000` e `:9001`) — esperado `0`
+(`:9000` e `:9002`) — esperado `0`
 (ou métrica ausente) em operação normal. Se aparecer `timeout`, reporte (indica holder
 morto sem `publish task-finished`; a Fase 1.4 já encurta esses casos).
 
