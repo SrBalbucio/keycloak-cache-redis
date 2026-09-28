@@ -7,41 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-28
+
+Alvo: Keycloak 26.7.x. Baseline multinó validado (delivery 1:1, lag em ms, recovery sem
+restart) — ver `docs/cluster-baseline.md`.
+
 ### Added
 
-- Authz cache outcome metrics (`HIT` / `MISS` / `ERROR`) and CAS conflict metrics (`CAS_RETRY` / `CAS_FAIL`).
-- Cluster async lock completion via PUBSUB channel `cluster:task-finished`.
-- Redis Cluster hash-tags `{realmId}` for user/auth sessions and indexes (aligned with login-failure).
-- ZSET indexes by `lastSessionRefresh` + `ZREVRANGE` admin pagination.
-- Redis counters for `getActiveClientSessionStats`.
-- Optional offline session JPA write-through / preload (`persistOfflineSessions`, default false).
-- `RedisPublicKeyStorageProvider`: Redis L2 + L1 + PUBSUB invalidation for public keys (SPI id `infinispan`).
-- Separate `redisConnection` factory `id=authz` (`KC_SPI_REDIS_CONNECTION_AUTHZ_*`) with fallback to `default`.
-- Durable revoked tokens: write-through to `RevokedTokenPersisterProvider` + preload on `PostMigrationEvent` (`persistRevokedTokens`, default true).
-- Entity cache MVP (`KC_CACHE_REDIS_ENTITY_ENABLED`, default false): Redis L2 indexes for user/realm/client hot paths + L1 + invalidation (`docs/entity-cache.md`).
-- Woodpecker CI (`.woodpecker/ci.yml`) and release deploy (`.woodpecker/release.yml` → GitHub Releases on `v*` tags).
-- GitHub Actions CI (`mvn verify` with Testcontainers Redis).
-- Apache License 2.0 and Maven Wrapper.
-- Integration tests for session, auth-session, login-failure, single-use, and cluster providers.
-- Atomic Lua CAS + index membership updates (`RedisHashCas` / `RedisChangelogTransaction`).
-- Redis Cluster hash-tags for login-failure keys (`{realmId}`).
-- Index lifecycle: membership deltas, expire-time cleanup, index TTL refresh.
-- Allowlisted Jackson polymorphism for cluster PUBSUB events (no open `DefaultTyping`).
-- Lua-based `put` / `replace` for single-use objects.
-- Safe cluster lock unlock via compare-and-del Lua.
+- Observabilidade do cluster bus: `vendor.lettuce.cluster.events` (por `eventKey`: `sent`,
+  `delivered`, `self_ignored`, `dropped_*`, `deser_error`, `publish_error`, `reconnected`,
+  `resync_cleared`), `vendor.lettuce.cluster.lag` (publish→deliver) e
+  `vendor.lettuce.cluster.task` (`finished`/`timeout`); `sentAtMillis` no envelope.
+- Reconciliação no reconnect PUBSUB (`PubSubReconnect`): limpa L1 próprio (authz LRU,
+  public-keys L1); canal `cluster:events` só observa (sem L1).
+- Espera fatiada em `executeIfNotExecutedAsync`: desiste antes do teto quando o lock some
+  sem conclusão (teto total inalterado).
+- Tolerância multi-versão no serializer (`FAIL_ON_UNKNOWN_PROPERTIES=false`; tipos fora da
+  allowlist continuam rejeitados) + suporte a `UserVerifiableCredentialsUpdatedEvent`.
+- Cobertura de transporte parametrizada (23 tipos de evento inter-nó) e `warn` em
+  `DCNotify` não-`ALL_DCS` (single-site assumido).
+- Conexão Redis lazy: `init` só valida config; boot nunca morre por Redis inalcançável.
+- `createClientSession` add-if-absent como o stock: segundo create não sobrescreve a entity
+  viva nem conta stats de novo.
+- Topologia multinó de referência: Postgres compartilhado + LB nginx (`:8090`, sem sticky)
+  + métricas por nó (`docs/cluster-baseline.md`, `docker-compose.multinode.yml`).
+- Matriz `eventKey` → emissor/listener → cache local (`docs/cluster-event-matrix.md`).
+- Testes: guard de lifecycle (`close()` no-op), reconnect, waiter early-exit, lazy connect,
+  add-if-absent, chaos (lost-invalidation, disconnect).
 
 ### Fixed
 
-- `ResourceAdapter.getScopes()` now resolves cached `scopeIds` on cache hit.
-- `executeIfNotExecutedAsync` now completes waiters (previously timed out without `taskFinished`).
+- **Crítico:** `DefaultKeycloakSession.close()` (inclusive no bootstrap) fechava o
+  `ClusterProvider` compartilhado e matava a invalidação cross-node sem logs. `close()` agora
+  é no-op como o stock; ciclo de vida na factory.
+- `RedisPublicKeyStorageProvider.close()` limpava o L1 compartilhado a cada request.
+- `PubSubReconnect` ignorava o primeiro (e único) reconnect — todo evento agora reconcilia.
+- Auth-session adapter snapshot + write-through (leitura pós-remoção de tab).
+- `executeIfNotExecutedAsync` completa waiters via `cluster:task-finished`.
+- `ResourceAdapter.getScopes()` em cache hit.
 
 ### Changed
 
-- Login-failure Redis key layout uses hash-tags (breaking for existing login-failure keys).
-- User/auth session Redis key layout uses `{realmId}` hash-tags (breaking for existing session keys).
-- `getActiveClientSessionStats` reads Redis counters instead of hydrating all sessions.
-- External `REDIS_TEST_URI` no longer allows `FLUSHDB` unless `REDIS_TEST_ALLOW_FLUSH=true`.
+- Authz cache outcome metrics (`HIT` / `MISS` / `ERROR`) e CAS (`CAS_RETRY` / `CAS_FAIL`).
+- Locks async completam via `cluster:task-finished`.
+- Hash-tags `{realmId}`, índices ZSET + paginação admin, contadores `getActiveClientSessionStats`.
+- Offline JPA write-through/preload opt-in; revoked tokens duráveis (default true).
+- Conexão `authz` separada opt-in; public keys em Redis L2+L1+PUBSUB.
+- Key layouts com hash-tag (breaking para chaves antigas); `FLUSHDB` externo exige flag.
 
-## [1.0.0] - TBD
+### Removed
+
+- Entity cache Redis de realm/user (incompatível com casts do core para
+  `RealmCacheSession`/`UserCacheSession` + sobrescrita do slot `default`); flags
+  `KC_CACHE_REDIS_ENTITY_*` sem efeito. Detalhes em `docs/entity-cache.md`.
+- `docs/spec-authsession-and-realm-cache-fix.md` dissolvido nos docs finais.
+
+## [1.0.0] - 2026-08-11
 
 Initial stable release target for Keycloak 26.7.1.
