@@ -102,13 +102,8 @@ class RedisPubsubClusterProviderTest {
 
             provider.reconnectListener.onRedisConnected(null, null);
             assertTrue(
-                    clusterEventCount("cluster", RedisMetrics.ClusterEvent.RECONNECTED) == reconnectedBefore,
-                    "first connect must be ignored");
-
-            provider.reconnectListener.onRedisConnected(null, null);
-            assertTrue(
                     clusterEventCount("cluster", RedisMetrics.ClusterEvent.RECONNECTED) > reconnectedBefore,
-                    "reconnect must be recorded");
+                    "observed connect must be recorded as reconnect (listener attaches post-connect)");
             assertTrue(
                     clusterEventCount("cluster", RedisMetrics.ClusterEvent.RESYNC_CLEARED) == clearedBefore,
                     "cluster channel has no local L1 to clear");

@@ -115,8 +115,14 @@ morto sem `publish task-finished`; a Fase 1.4 já encurta esses casos).
   - `USER_INVALIDATION_EVENTS`: sent=1 → delivered=1.
   - `self_ignored` == `sent` em cada nó (eco próprio descartado como esperado).
   - Convergência funcional (displayName/client novo) visível no outro nó em ≤2s.
-- [ ] Lag p99/avg por `eventKey` (`vendor_lettuce_cluster_lag_seconds_*`).
-- [ ] C: comportamento no outage; `reconnected` por canal; convergência pós-volta sem restart.
+- [x] Lag (2026-09-28): `REALM_*` avg 5.5ms (nó 1, 6 eventos) e 58ms (nó 2, 3 eventos);
+  `USER_*` 8ms; `max` em resolução de segundos. Tudo ordens de magnitude abaixo do SLO de 2s.
+- [x] C (2026-09-28): outage ~30s → Lettuce `ConnectionWatchdog` reconectou sozinho
+  (`Reconnecting…`/`Reconnected`, ambos os nós), contadores estáveis (sem escritas no
+  outage, nada a comparar), tudo funcionando pós-volta **sem restart**. Achado: o guard
+  "ignora a primeira conexão" do `PubSubReconnect` descartava exatamente o primeiro (e
+  único) reconnect — corrigido (todo evento agora reconcilia); o `reconnected` aparece a
+  partir do próximo outage.
 - [ ] D: `timeout` em `cluster.task` (esperado 0).
 - [ ] Qualquer `Failed to publish` / `Failed to handle` nos logs.
 

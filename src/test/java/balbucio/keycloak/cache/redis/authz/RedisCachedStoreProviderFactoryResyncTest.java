@@ -56,13 +56,8 @@ class RedisCachedStoreProviderFactoryResyncTest extends AbstractRedisIntegration
 
             factory.reconnectListener.onRedisConnected(null, null);
             assertTrue(
-                    clusterEventCount("authz-lru", RedisMetrics.ClusterEvent.RECONNECTED) == reconnectedBefore,
-                    "first connect must be ignored");
-
-            factory.reconnectListener.onRedisConnected(null, null);
-            assertTrue(
                     clusterEventCount("authz-lru", RedisMetrics.ClusterEvent.RECONNECTED) > reconnectedBefore,
-                    "reconnect must be recorded");
+                    "observed connect must be recorded as reconnect (listener attaches post-connect)");
             assertTrue(
                     clusterEventCount("authz-lru", RedisMetrics.ClusterEvent.RESYNC_CLEARED) > clearedBefore,
                     "reconnect must clear the shared LRU");

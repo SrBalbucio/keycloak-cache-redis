@@ -1,7 +1,5 @@
 package balbucio.keycloak.cache.redis.connection;
 
-import java.util.concurrent.atomic.AtomicBoolean;
-
 import balbucio.keycloak.cache.redis.RedisMetrics;
 import io.lettuce.core.RedisConnectionStateAdapter;
 import io.lettuce.core.RedisConnectionStateListener;
@@ -30,30 +28,30 @@ public final class PubSubReconnect {
 
     /**
      * Cria o listener de reconnect para {@code owner} (ex.: {@code "authz-lru"}).
-     * A primeira conexão é ignorada (o L1 nasce vazio); a cada reconexão subsequente
-     * registra métrica, roda {@code onReconnect} (tipicamente limpar o L1) e registra
-     * a conclusão. {@code onReconnect} pode ser {@code null} (só observa + métrica,
+     * Todo evento é tratado como reconnect: o listener é sempre anexado <em>após</em> a
+     * conexão já estabelecida ({@code connectPubSub()} + subscribe), então o primeiro
+     * {@code onRedisConnected} observado já é uma reconexão genuína (não há "primeira
+     * conexão" a ignorar — o L1 pode ter acumulado stale durante o outage).
+     * Cada evento registra métrica, roda {@code onReconnect} (tipicamente limpar o L1) e
+     * registra a conclusão. {@code onReconnect} pode ser {@code null} (só observa + métrica,
      * como no canal {@code cluster:events}, onde não há L1 próprio).
      */
     public static RedisConnectionStateListener reconnectListener(String owner, Runnable onReconnect) {
-        AtomicBoolean firstConnect = new AtomicBoolean(true);
         return new RedisConnectionStateAdapter() {
             @Override
             public void onRedisConnected(
                     io.lettuce.core.RedisChannelHandler<?, ?> connection,
                     java.net.SocketAddress socketAddress) {
-                if (!firstConnect.compareAndSet(true, false)) {
-                    LOG.infof(
-                            "%s PUBSUB reconnected — invalidations published during the outage were lost; reconciling local state",
-                            owner);
-                    RedisMetrics.recordClusterEvent(owner, RedisMetrics.ClusterEvent.RECONNECTED);
-                    if (onReconnect != null) {
-                        try {
-                            onReconnect.run();
-                            RedisMetrics.recordClusterEvent(owner, RedisMetrics.ClusterEvent.RESYNC_CLEARED);
-                        } catch (RuntimeException e) {
-                            LOG.debugf(e, "Reconnect reconciliation failed for %s", owner);
-                        }
+                LOG.infof(
+                        "%s PUBSUB reconnected — invalidations published during the outage were lost; reconciling local state",
+                        owner);
+                RedisMetrics.recordClusterEvent(owner, RedisMetrics.ClusterEvent.RECONNECTED);
+                if (onReconnect != null) {
+                    try {
+                        onReconnect.run();
+                        RedisMetrics.recordClusterEvent(owner, RedisMetrics.ClusterEvent.RESYNC_CLEARED);
+                    } catch (RuntimeException e) {
+                        LOG.debugf(e, "Reconnect reconciliation failed for %s", owner);
                     }
                 }
             }

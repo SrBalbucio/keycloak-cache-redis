@@ -58,14 +58,8 @@ class MapPublicKeyStorageProviderFactoryResyncTest extends AbstractRedisIntegrat
             factory.reconnectListener.onRedisConnected(null, null);
             assertTrue(
                     clusterEventCount("public-keys", RedisMetrics.ClusterEvent.RECONNECTED)
-                            == reconnectedBefore,
-                    "first connect must be ignored");
-
-            factory.reconnectListener.onRedisConnected(null, null);
-            assertTrue(
-                    clusterEventCount("public-keys", RedisMetrics.ClusterEvent.RECONNECTED)
                             > reconnectedBefore,
-                    "reconnect must be recorded");
+                    "observed connect must be recorded as reconnect (listener attaches post-connect)");
             assertTrue(
                     clusterEventCount("public-keys", RedisMetrics.ClusterEvent.RESYNC_CLEARED)
                             > clearedBefore,

@@ -15,16 +15,15 @@ import org.junit.jupiter.api.Test;
 class PubSubReconnectTest {
 
     @Test
-    void firstConnectIsIgnoredAndReconnectRunsAction() {
+    void everyConnectEventReconciles() {
         AtomicInteger runs = new AtomicInteger();
         RedisConnectionStateListener listener =
                 PubSubReconnect.reconnectListener("owner", runs::incrementAndGet);
 
+        // O listener é anexado após a conexão estabelecida, então não há "primeira
+        // conexão" a ignorar: todo onRedisConnected já é uma reconexão genuína.
         assertDoesNotThrow(() -> listener.onRedisConnected(null, null));
-        assertTrue(runs.get() == 0, "first connect must not run the reconciliation");
-
-        assertDoesNotThrow(() -> listener.onRedisConnected(null, null));
-        assertTrue(runs.get() == 1, "reconnect must run the reconciliation");
+        assertTrue(runs.get() == 1, "first observed connect must already reconcile");
 
         assertDoesNotThrow(() -> listener.onRedisConnected(null, null));
         assertTrue(runs.get() == 2, "every reconnect must reconcile");
