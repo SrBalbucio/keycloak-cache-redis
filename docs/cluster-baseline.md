@@ -74,9 +74,9 @@ docker compose -f docker-compose.multinode.yml up
 
 ## Gaps catalogados na Fase 0 (entrada da Fase 1)
 
-1. `FAILS_ON_UNKNOWN_PROPERTIES` ligado (`ClusterEventSerializer`): mensagem de versão mais
-   nova é descartada inteira pelos nós antigos (prova em `ClusterEventSerializerTest#
-   unknownExtraFieldsOn*`). Melhoria: `false` + teste multi-versão (Fase 1.1).
+1. ~~`FAILS_ON_UNKNOWN_PROPERTIES` ligado~~ ✅ **Resolvido na Fase 1.1**: mapper tolerante +
+   mixin ausente de `UserVerifiableCredentialsUpdatedEvent` adicionado
+   (`ClusterEventSerializerTest#unknownExtraFieldsOn*AreIgnored`, round-trip do evento VC).
 2. Sem replay após reconnect (prova em `RedisLostInvalidationIntegrationTest`). Melhoria:
    reconciliação/clear conservador no reconnect (Fase 1.2).
 3. `DCNotify` transportado, sem filtro (single-site assumido). Melhoria: honrar ou
@@ -84,5 +84,8 @@ docker compose -f docker-compose.multinode.yml up
 4. Waiter async preso até timeout se holder morre sem `publish task-finished`
    (`RedisPubsubClusterProvider`, `docs/limitations.md`). Melhoria: completar como
    `timeout` + métrica (parcialmente instrumentado na Fase 0; semântica na Fase 1.4).
-5. Cobertura de teste só `ClientAddedEvent` no publish→deliver inter-nó
-   (`RedisPubsubClusterProviderIntegrationTest`). Melhoria: parametrizar todos os tipos (Fase 1.3).
+5. ~~Cobertura de teste só `ClientAddedEvent` no publish→deliver inter-nó~~ ✅ **Resolvido
+   na Fase 1.3**: `RedisPubsubClusterProviderIntegrationTest#
+   allSupportedEventTypesAreDeliveredInterNode` publica os 23 tipos suportados do nó A e
+   confere entrega ordenada no nó B. `DCNotify` ≠ `ALL_DCS` agora gera `warn` explícito
+   (single-site assumido) em vez de descarte silencioso.

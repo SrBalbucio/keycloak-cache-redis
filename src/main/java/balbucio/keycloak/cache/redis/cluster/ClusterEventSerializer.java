@@ -25,10 +25,12 @@ import balbucio.keycloak.cache.redis.cluster.events.UserFederationLinkRemovedEve
 import balbucio.keycloak.cache.redis.cluster.events.UserFederationLinkUpdatedEventMixin;
 import balbucio.keycloak.cache.redis.cluster.events.UserFullInvalidationEventMixin;
 import balbucio.keycloak.cache.redis.cluster.events.UserUpdatedEventMixin;
+import balbucio.keycloak.cache.redis.cluster.events.UserVerifiableCredentialsUpdatedEventMixin;
 import balbucio.keycloak.cache.redis.cluster.events.ClusterEventMixin;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.PropertyAccessor;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
 import org.jboss.logging.Logger;
@@ -57,6 +59,7 @@ import org.keycloak.models.cache.infinispan.events.UserFederationLinkRemovedEven
 import org.keycloak.models.cache.infinispan.events.UserFederationLinkUpdatedEvent;
 import org.keycloak.models.cache.infinispan.events.UserFullInvalidationEvent;
 import org.keycloak.models.cache.infinispan.events.UserUpdatedEvent;
+import org.keycloak.models.cache.infinispan.events.UserVerifiableCredentialsUpdatedEvent;
 
 public final class ClusterEventSerializer {
 
@@ -69,6 +72,12 @@ public final class ClusterEventSerializer {
         // (only "id" is exposed via a getter). Without field visibility the JSON would drop
         // realmId/clientId/roleName/etc., silently breaking cross-node invalidation.
         MAPPER.setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY);
+
+        // Fase 1.1: tolerate schema evolution across Keycloak versions. A newer node may add
+        // fields to an event (or to the envelope); older nodes must ignore them and still
+        // invalidate, instead of dropping the whole message. The polymorphic @class allowlist
+        // below still rejects unknown *types*.
+        MAPPER.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
         // Allowlist-only polymorphism for ClusterEvent (no open DefaultTyping).
         MAPPER.setPolymorphicTypeValidator(
@@ -99,6 +108,9 @@ public final class ClusterEventSerializer {
         MAPPER.addMixIn(UserFederationLinkUpdatedEvent.class, UserFederationLinkUpdatedEventMixin.class);
         MAPPER.addMixIn(UserFullInvalidationEvent.class, UserFullInvalidationEventMixin.class);
         MAPPER.addMixIn(UserUpdatedEvent.class, UserUpdatedEventMixin.class);
+        MAPPER.addMixIn(
+                UserVerifiableCredentialsUpdatedEvent.class,
+                UserVerifiableCredentialsUpdatedEventMixin.class);
         MAPPER.addMixIn(
                 AuthenticationSessionAuthNoteUpdateEvent.class,
                 AuthenticationSessionAuthNoteUpdateEventMixin.class);

@@ -19,6 +19,10 @@ Factory: `RedisPubsubClusterProviderFactory` (id `infinispan`, order `3`)
 
 Serializa eventos de invalidação do Keycloak (realm, user, client, role, group, client scope, federation links, consents, etc.) com Jackson mixins e publica no canal PUBSUB. Os outros nós aplicam a invalidação nos caches locais.
 
+Single-site assumido: `DCNotify` é transportado no envelope mas sem filtro multi-DC. Se o core
+pedir `LOCAL_DC_ONLY`/`ALL_BUT_LOCAL_DC`, o provider loga `warn` e entrega mesmo assim
+(Fase 1.3). Não há suporte a multi-region active-active.
+
 ### Distributed locks
 
 `executeIfNotExecuted` usa `SET NX EX` + unlock Lua tokenizado. `executeIfNotExecutedAsync` registra um `TaskCallback` e, ao liberar o lock, publica no canal `cluster:task-finished` (payload `task::<taskKey>`) para completar waiters neste nó e nos demais.

@@ -40,7 +40,7 @@ Constantes em `InfinispanUserCacheProviderFactory` (`"USER_INVALIDATION_EVENTS"`
 | Listener invalidação | `InfinispanUserCacheProviderFactory.lazyInit` → `USER_INVALIDATION_EVENTS` → `UserCacheManager::onInvalidateEvent` (`users` + `userRevisions`) |
 | Listener clear | `...USER_CLEAR_CACHE_EVENTS` → `UserCacheManager::onClearEvent` |
 | Emissor | `UserCacheSession` (`notify(USER_CLEAR_CACHE_EVENTS, ClearCacheEvent, true)`), `RealmAdapter` (`notify(USER_CLEAR_CACHE_EVENTS, ...)` ao mudar realm afetando users) |
-| Eventos transportados | `UserUpdatedEvent`, `UserFullInvalidationEvent`, `UserCacheRealmInvalidationEvent`, `UserConsentsUpdatedEvent`, `UserFederationLinkUpdated/RemovedEvent` |
+| Eventos transportados | `UserUpdatedEvent`, `UserFullInvalidationEvent`, `UserCacheRealmInvalidationEvent`, `UserConsentsUpdatedEvent`, `UserFederationLinkUpdated/RemovedEvent`, `UserVerifiableCredentialsUpdatedEvent` (Fase 1.1 — tinha mixin ausente e seria descartado) |
 
 ## `AUTHORIZATION_*` (stock — referência, não ativo com nosso authz)
 
@@ -71,10 +71,13 @@ compatibilidade, mas o emissor stock não roda aqui.
 ## Cobertura do serializer vs emissores ativos
 
 `ClusterEventSerializer` cobre todos os tipos acima (round-trip em
-`ClusterEventSerializerTest`). Com o flag ligado, os emissores ativos são os de
+`ClusterEventSerializerTest`, transporte inter-nó parametrizado em
+`RedisPubsubClusterProviderIntegrationTest#allSupportedEventTypesAreDeliveredInterNode`).
+Com o flag ligado, os emissores ativos são os de
 **realm/user** (stock local) — sessão/authz/keys stock não emitem porque seus SPIs foram
-substituídos. `DCNotify` é transportado no envelope mas sem filtro multi-DC (single-site;
-`docs/limitations.md`).
+substituídos. `DCNotify` é transportado no envelope mas sem filtro multi-DC: single-site
+assumido; `notify()` loga `warn` quando o core pede `LOCAL_DC_ONLY`/`ALL_BUT_LOCAL_DC`
+(`docs/limitations.md`).
 
 ## Implicação para Fase 1
 

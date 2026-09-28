@@ -141,7 +141,7 @@ class RedisSerializationCompatibilityTest extends AbstractRedisIntegrationTest {
     }
 
     @Test
-    void malformedClusterEventDoesNotTakeSubscriberDown() throws Exception {
+    void unknownFieldsAreIgnoredAndSubscriberStaysUp() throws Exception {
         ExecutorService executor = Executors.newCachedThreadPool();
         try {
             RedisPubsubClusterProvider node =
@@ -150,28 +150,59 @@ class RedisSerializationCompatibilityTest extends AbstractRedisIntegrationTest {
             Thread.sleep(300);
 
             List<ClusterEvent> received = new CopyOnWriteArrayList<>();
-            CountDownLatch latch = new CountDownLatch(1);
+            CountDownLatch latch = new CountDownLatch(2);
             node.registerListener("compat-task", event -> {
                 received.add(event);
                 latch.countDown();
             });
 
-            // Unknown extra field inside the event payload: rejected by the serializer.
-            String malformed =
+            // Unknown extra field inside the event payload (newer version): ignored since Fase 1.1,
+            // the invalidation itself must still be delivered.
+            String withFutureField =
                     "{\"eventKey\":\"compat-task\",\"events\":[{\"@class\":"
                             + "\"org.keycloak.models.cache.infinispan.events.ClientAddedEvent\","
                             + "\"id\":\"c1\",\"realmId\":\"r1\",\"futureFlag\":true}],"
                             + "\"ignoreSender\":false,\"dcNotify\":\"ALL_DCS\",\"senderId\":\"n1\"}";
-            provider().sync().publish(RedisKeySpace.key("cluster:events"), malformed);
+            provider().sync().publish(RedisKeySpace.key("cluster:events"), withFutureField);
 
-            Thread.sleep(500);
-            assertTrue(received.isEmpty(), "malformed event must be dropped, not delivered");
-
-            // The node must keep consuming: a valid event right after is delivered normally.
+            // A valid event right after is delivered normally.
             ClusterEvent valid = ClientAddedEvent.create("c2", "r1");
             node.notify("compat-task", valid, false, org.keycloak.cluster.ClusterProvider.DCNotify.ALL_DCS);
 
-            assertTrue(latch.await(5, TimeUnit.SECONDS), "valid event after malformed one must arrive");
+            assertTrue(latch.await(5, TimeUnit.SECONDS), "both events must arrive");
+            assertEquals(2, received.size());
+            assertEquals(ClientAddedEvent.create("c1", "r1"), received.get(0));
+            assertEquals(valid, received.get(1));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void garbagePayloadDoesNotTakeSubscriberDown() throws Exception {
+        ExecutorService executor = Executors.newCachedThreadPool();
+        try {
+            RedisPubsubClusterProvider node =
+                    new RedisPubsubClusterProvider(
+                            provider().sync(), provider().connectPubSub(), 100, executor, "node-garbage");
+            Thread.sleep(300);
+
+            List<ClusterEvent> received = new CopyOnWriteArrayList<>();
+            CountDownLatch latch = new CountDownLatch(1);
+            node.registerListener("garbage-task", event -> {
+                received.add(event);
+                latch.countDown();
+            });
+
+            provider().sync().publish(RedisKeySpace.key("cluster:events"), "{not-json-at-all");
+
+            Thread.sleep(500);
+            assertTrue(received.isEmpty(), "garbage payload must be dropped, not delivered");
+
+            ClusterEvent valid = ClientAddedEvent.create("c9", "r1");
+            node.notify("garbage-task", valid, false, org.keycloak.cluster.ClusterProvider.DCNotify.ALL_DCS);
+
+            assertTrue(latch.await(5, TimeUnit.SECONDS), "valid event after garbage must arrive");
             assertEquals(1, received.size());
             assertEquals(valid, received.get(0));
         } finally {

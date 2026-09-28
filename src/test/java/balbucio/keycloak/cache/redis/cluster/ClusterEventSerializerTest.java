@@ -41,6 +41,7 @@ import org.keycloak.models.cache.infinispan.events.UserFederationLinkRemovedEven
 import org.keycloak.models.cache.infinispan.events.UserFederationLinkUpdatedEvent;
 import org.keycloak.models.cache.infinispan.events.UserFullInvalidationEvent;
 import org.keycloak.models.cache.infinispan.events.UserUpdatedEvent;
+import org.keycloak.models.cache.infinispan.events.UserVerifiableCredentialsUpdatedEvent;
 
 class ClusterEventSerializerTest {
 
@@ -242,26 +243,31 @@ class ClusterEventSerializerTest {
     }
 
     /**
-     * CHARACTERIZED forward-incompatibility: unknown fields added by a newer provider version
-     * make the whole message fail deserialization (FAILS_ON_UNKNOWN_PROPERTIES is on), so a
-     * mixed-version cluster drops those messages instead of ignoring the unknown fields.
+     * Fase 1.1: forward-compatibility. Unknown fields added by a newer provider version are
+     * ignored (FAIL_ON_UNKNOWN_PROPERTIES=false) so a mixed-version cluster still invalidates.
+     * Unknown *types* are still rejected by the @class allowlist (see below).
      */
     @Test
-    void unknownExtraFieldsOnEventAreRejected() {
+    void unknownExtraFieldsOnEventAreIgnored() throws Exception {
         String json =
                 """
                 {"eventKey":"k","events":[{"@class":"org.keycloak.models.cache.infinispan.events.ClientAddedEvent","id":"c1","realmId":"r1","futureFlag":true}],"ignoreSender":true,"dcNotify":"ALL_DCS","senderId":"n1"}
                 """;
-        assertThrows(JsonProcessingException.class, () -> ClusterEventSerializer.deserialize(json));
+        ClusterMessage msg = ClusterEventSerializer.deserialize(json);
+
+        assertEquals(ClientAddedEvent.create("c1", "r1"), msg.getEvents().get(0));
     }
 
     @Test
-    void unknownExtraFieldsOnEnvelopeAreRejected() {
+    void unknownExtraFieldsOnEnvelopeAreIgnored() throws Exception {
         String json =
                 """
                 {"eventKey":"k","events":[],"ignoreSender":true,"dcNotify":"ALL_DCS","senderId":"n1","futureEnvelopeField":1}
                 """;
-        assertThrows(JsonProcessingException.class, () -> ClusterEventSerializer.deserialize(json));
+        ClusterMessage msg = ClusterEventSerializer.deserialize(json);
+
+        assertEquals("k", msg.getEventKey());
+        assertTrue(msg.getEvents().isEmpty());
     }
 
     @Test
@@ -270,6 +276,11 @@ class ClusterEventSerializerTest {
         String json = ClusterEventSerializer.serialize("k", List.of(event), true, DCNotify.ALL_DCS, "n1");
 
         assertTrue(json.contains("role-name-1"), "expected roleName to survive serialization: " + json);
+    }
+
+    @Test
+    void roundTripUserVerifiableCredentialsUpdated() throws Exception {
+        roundTrip(UserVerifiableCredentialsUpdatedEvent.create("user-vc-1"));
     }
 
     @Test

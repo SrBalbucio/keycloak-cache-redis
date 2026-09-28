@@ -24,6 +24,7 @@ import org.keycloak.models.cache.infinispan.events.UserFederationLinkRemovedEven
 import org.keycloak.models.cache.infinispan.events.UserFederationLinkUpdatedEvent;
 import org.keycloak.models.cache.infinispan.events.UserFullInvalidationEvent;
 import org.keycloak.models.cache.infinispan.events.UserUpdatedEvent;
+import org.keycloak.models.cache.infinispan.events.UserVerifiableCredentialsUpdatedEvent;
 
 /**
  * Explicit polymorphic allowlist for {@link org.keycloak.cluster.ClusterEvent} payloads on the Redis
@@ -52,6 +53,7 @@ import org.keycloak.models.cache.infinispan.events.UserUpdatedEvent;
     @JsonSubTypes.Type(UserFederationLinkUpdatedEvent.class),
     @JsonSubTypes.Type(UserFullInvalidationEvent.class),
     @JsonSubTypes.Type(UserUpdatedEvent.class),
+    @JsonSubTypes.Type(UserVerifiableCredentialsUpdatedEvent.class),
     @JsonSubTypes.Type(AuthenticationSessionAuthNoteUpdateEvent.class)
 })
 public abstract class ClusterEventMixin {}

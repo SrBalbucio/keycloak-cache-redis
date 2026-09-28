@@ -93,6 +93,14 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
             boolean ignoreSender,
             DCNotify dcNotify) {
         try {
+            // Fase 1.3: single-site assumido (docs/clustering.md, docs/limitations.md).
+            // O dcNotify é transportado no envelope mas sem filtro multi-DC; avisar quando o
+            // core pedir roteamento por DC para o comportamento não ficar silencioso.
+            if (dcNotify != null && dcNotify != DCNotify.ALL_DCS) {
+                LOG.warnf(
+                        "Ignoring DCNotify=%s for cluster event %s (single-site deployment assumed)",
+                        dcNotify, taskKey);
+            }
             String serialized =
                     ClusterEventSerializer.serialize(
                             taskKey, List.copyOf(events), ignoreSender, dcNotify, nodeId);

@@ -32,7 +32,7 @@ interferem no container compartilhado dos demais testes de integração.
 | Invalidation perdida | `RedisLostInvalidationIntegrationTest` (3 testes) | Subscriber derrubado antes do publish; ver TTL L2 e L1 sem bound |
 | TTL incorreto | `RedisTtlMatrixIntegrationTest` (8 testes) | `PTTL` no Redis vs. política do realm (online, remember-me, offline ± max-lifespan, refresh, auth-session, login-failure, single-use) |
 | Serialization incompatível (hash) | `RedisSerializationCompatibilityTest` (4 testes) | Campos ausentes/extras/corrompidos + hash sem `version` |
-| Serialization incompatível (eventos) | `ClusterEventSerializerTest#unknownExtraFields*` + `RedisSerializationCompatibilityTest#malformedClusterEventDoesNotTakeSubscriberDown` | Campos novos no JSON e evento malformado no canal |
+| Serialization incompatível (eventos) | `ClusterEventSerializerTest#unknownExtraFields*AreIgnored` + `RedisSerializationCompatibilityTest#unknownFieldsAreIgnoredAndSubscriberStaysUp` + `#garbagePayloadDoesNotTakeSubscriberDown` | Campos novos no JSON são ignorados (Fase 1.1); payload não-JSON é descartado sem derrubar o subscriber |
 | Redis disconnect | `RedisDisconnectIntegrationTest` (3 testes) | pause/unpause (freeze) e crash via SIGKILL + start; fail-fast, reconnect Lettuce, integridade |
 
 ## Achados caracterizados (comportamento atual documentado pelos testes)
@@ -46,10 +46,12 @@ interferem no container compartilhado dos demais testes de integração.
 3. **Campo `version` corrompido quebra a leitura** da sessão com
    `NumberFormatException` (não degrada para miss).
 4. **Hash sem campo `version` é adotado** no primeiro write (vira version 1).
-5. **Eventos de cluster com campos desconhecidos são rejeitados por inteiro**
-   (`FAILS_ON_UNKNOWN_PROPERTIES` ligado): em cluster multi-versão, mensagens de uma
-   versão mais nova são descartadas pelos nós antigos. Candidato a melhoria:
-   `FAILS_ON_UNKNOWN_PROPERTIES=false` no mapper.
+5. **Eventos de cluster com campos desconhecidos são ignorados (Fase 1.1).**
+   `FAIL_ON_UNKNOWN_PROPERTIES=false` no mapper: mensagens de uma versão mais nova têm os
+   campos extras descartados e a invalidação é entregue normalmente. Tipos (`@class`) fora da
+   allowlist continuam rejeitados (`ClusterEventSerializerTest#rejectsNonAllowlistedEventTypes`).
+   Payloads que não são JSON continuam descartados sem derrubar o subscriber
+   (`RedisSerializationCompatibilityTest#garbagePayloadDoesNotTakeSubscriberDown`).
 6. **Restart do Redis sem persistência degrada para miss** (sessões somem, sem erro)
    e o provider volta a escrever imediatamente.
 
