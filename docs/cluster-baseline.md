@@ -17,7 +17,15 @@ docker compose -f docker-compose.multinode.yml up
 
 - Nó 1: http://localhost:8080 (admin/admin)
 - Nó 2: http://localhost:8081
-- Métricas (se habilitadas no Keycloak): `/metrics` em cada nó.
+- Métricas: `/metrics` em cada nó (o compose já liga `KC_METRICS_ENABLED=true`).
+
+> **Limite conhecido deste compose:** cada nó usa seu próprio H2 (`h2_data_1`/`h2_data_2`).
+> Sessões e invalidações via Redis funcionam, mas **entidades de banco (realm, client, user)
+> não são compartilhadas** — mudar o display name no nó 1 *nunca* aparece no nó 2,
+> independente de cache. Para convergência funcional de entidades seria preciso um banco
+> compartilhado (ex.: Postgres no compose — trabalho futuro). Neste baseline, o cenário B
+> mede o **transporte** (`sent`→`delivered`, lag); a convergência funcional de entidades
+> fica para o ambiente com DB compartilhado.
 
 ## Cenários
 
@@ -29,32 +37,46 @@ docker compose -f docker-compose.multinode.yml up
 
 ### B. Propagação realm/client/role/group/user (o que a Fase 0 mede)
 
-1. No nó 1 (Admin Console): alterar displayName do realm / criar client / criar role /
-   atualizar grupo / atualizar atributo de usuário.
-2. No nó 2: reler o objeto (realm JSON, client list, role, members, user).
-3. Coletar por `eventKey` (`REALM_INVALIDATION_EVENTS`, `USER_INVALIDATION_EVENTS`, ...):
-   - `vendor.lettuce.cluster.events{outcome="sent"}` no nó 1 vs `{outcome="delivered"}` no nó 2
-     (devem bater 1:1 por escrita; `dropped_no_listener` só é esperado para eventKeys sem
-     emissor stock ativo, ver [cluster-event-matrix.md](cluster-event-matrix.md)).
-   - `vendor.lettuce.cluster.lag{eventKey=...}` p50/p99 (publish→deliver).
-4. Esperado hoje: visível no outro nó em ~segundos (PUBSUB), sem restart.
+> Mede o **transporte**, não a convergência de entidades (ver limite do H2 acima).
+
+1. Snapshot antes: `curl -s localhost:8080/metrics | grep vendor_lettuce_cluster_events` e o
+   mesmo no `:8081`. Anote os valores por `eventKey`/`outcome`.
+2. No nó 1 (Admin Console): alterar displayName do realm + Save; criar um client; criar uma
+   role; atualizar um atributo de usuário. Cada escrita emite invalidações
+   (`REALM_INVALIDATION_EVENTS`, `USER_INVALIDATION_EVENTS`, ...).
+3. Recapturar as métricas nos dois nós e confrontar por `eventKey`:
+   - `outcome="sent"` no nó 1 vs `outcome="delivered"` no nó 2 — devem bater 1:1 por escrita;
+     `dropped_no_listener` só é esperado para eventKeys sem emissor stock ativo, ver
+     [cluster-event-matrix.md](cluster-event-matrix.md).
+   - `vendor.lettuce.cluster.lag` (`vendor_lettuce_cluster_lag_seconds_count/sum/max`):
+     média = `sum/count`; `max` = pico. (p99 exigiria Prometheus; média+max bastam aqui.)
+4. Esperado: `delivered` acompanha `sent` em ~segundos, sem restart.
+5. Repita 2–3x para noção de variância.
 
 ### C. Outage do Redis 30s (janela de stale)
 
-1. `docker compose -f docker-compose.multinode.yml stop valkey` (30s), fazer 1 escrita de
-   realm no nó 1 durante o outage, voltar Valkey.
-2. Esperado **atual** (comportamento caracterizado): a invalidação publicada sem subscriber
-   é perdida (sem replay); o nó surdo fica stale até próximo evento/clear/restart —
-   mesma classe de hazard provada para L1 em `RedisLostInvalidationIntegrationTest`.
-   Anotar duração do stale observado; é o dado que justifica a Fase 1.2 (reconciliação no reconnect).
+1. `docker compose -f docker-compose.multinode.yml stop valkey` (30s). Durante o outage, o
+   Admin Console deve apresentar erros/timeouts (sessões vivem no Redis — comportamento
+   esperado, anote o que observar).
+2. `docker compose -f docker-compose.multinode.yml start valkey`. Nos logs, procure
+   `PUBSUB reconnected` (Fase 1.2). Nas métricas: `outcome="reconnected"` ≥ 1 nos canais
+   ativos (`cluster`, `public-keys`; `authz-lru` só se o LRU local estiver ligado —
+   desligado por padrão).
+3. Pós-volta: faça uma alteração de realm no nó 1 e confira `sent`→`delivered` + lag normal
+   — a prova de recuperação é **convergir de novo sem restartar o Keycloak**.
+4. Ressalva by-design (sem replay no PUBSUB): uma invalidação publicada *durante* o outage
+   nunca chega — o bound de stale nesses casos é a *próxima* invalidação. Se durante o
+   outage alguma escrita no nó 1 tiver retornado sucesso, confira se o efeito correspondente
+   ficou pendente até a próxima escrita.
+5. Anote: `publish_error`/`deser_error` (idealmente 0 fora do outage) e o tempo até o
+   `reconnected` aparecer.
 
 ### D. Locks async (residual conhecido)
 
-1. Disparar task `executeIfNotExecutedAsync` e matar o holder antes do unlock
-   (ou simular via teste com TTL curto).
-2. Esperado **atual**: waiters acordam só no `taskTimeoutInSeconds`
-   (`docs/limitations.md`); nova métrica `vendor.lettuce.cluster.task{outcome="timeout"}`
-   deve contar esses casos.
+Sem provocação manual: consulte
+`vendor_lettuce_cluster_task_seconds_count{outcome="timeout"}` nos dois nós — esperado `0`
+(ou métrica ausente) em operação normal. Se aparecer `timeout`, reporte (indica holder
+morto sem `publish task-finished`; a Fase 1.4 já encurta esses casos).
 
 ## SLO proposto (a confirmar com os números de B/C)
 
@@ -67,9 +89,11 @@ docker compose -f docker-compose.multinode.yml up
 
 ## Saída da Fase 0.3
 
-- [ ] p50/p99 de `cluster.lag` por `eventKey` em B.
-- [ ] Razão `delivered/sent` por `eventKey` em B (aponta perda sistemática vs canal saudável).
-- [ ] Duração do stale em C (justificativa da Fase 1.2).
+- [ ] A: sessão criada no nó 1 válida no nó 2 sem novo login.
+- [ ] B: tabela `sent` (nó 1) vs `delivered` (nó 2) por `eventKey` + lag médio/max por `eventKey` (3 rodadas).
+- [ ] C: comportamento observado no outage; `reconnected` por canal; convergência pós-volta sem restart (sim/não + tempo).
+- [ ] D: `timeout` em `cluster.task` (esperado 0).
+- [ ] Qualquer `Failed to publish` / `Failed to handle` nos logs.
 - [ ] Se B/C dentro do SLO, Fase 1 vira hardening pequeno; se há perda sistemática, priorizar 1.2.
 
 ## Gaps catalogados na Fase 0 (entrada da Fase 1)

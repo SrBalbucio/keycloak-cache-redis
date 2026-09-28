@@ -22,10 +22,11 @@ services:
     image: quay.io/keycloak/keycloak:26.7.1
     volumes:
       - h2_data_1:/opt/keycloak/data
-      - ./target/keycloak-cache-redis-1.0-SNAPSHOT-withdeps.jar:/opt/keycloak/providers/keycloak-cache-redis-1.0-SNAPSHOT-withdeps.jar
+      - ./target/keycloak-cache-redis-1.0.0-withdeps.jar:/opt/keycloak/providers/keycloak-cache-redis-1.0.0-withdeps.jar
     environment:
       KC_CACHE: local
       KC_COMMUNITY_REDIS_CACHE_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
       KC_SPI_REDIS_CONNECTION_DEFAULT_MODE: standalone
       KC_SPI_REDIS_CONNECTION_DEFAULT_NODES: valkey:6379
       KC_SPI_REDIS_CONNECTION_DEFAULT_KEY_PREFIX: kc
@@ -47,10 +48,11 @@ services:
     image: quay.io/keycloak/keycloak:26.7.1
     volumes:
       - h2_data_2:/opt/keycloak/data
-      - ./target/keycloak-cache-redis-1.0-SNAPSHOT-withdeps.jar:/opt/keycloak/providers/keycloak-cache-redis-1.0-SNAPSHOT-withdeps.jar
+      - ./target/keycloak-cache-redis-1.0.0-withdeps.jar:/opt/keycloak/providers/keycloak-cache-redis-1.0.0-withdeps.jar
     environment:
       KC_CACHE: local
       KC_COMMUNITY_REDIS_CACHE_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
       KC_SPI_REDIS_CONNECTION_DEFAULT_MODE: standalone
       KC_SPI_REDIS_CONNECTION_DEFAULT_NODES: valkey:6379
       KC_SPI_REDIS_CONNECTION_DEFAULT_KEY_PREFIX: kc

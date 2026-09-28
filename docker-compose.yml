@@ -9,7 +9,7 @@ services:
     image: quay.io/keycloak/keycloak:26.7.1
     volumes:
       - h2_data:/opt/keycloak/data
-      - ./target/keycloak-cache-redis-1.0-SNAPSHOT-withdeps.jar:/opt/keycloak/providers/keycloak-cache-redis-1.0-SNAPSHOT-withdeps.jar
+      - ./target/keycloak-cache-redis-1.0.0-withdeps.jar:/opt/keycloak/providers/keycloak-cache-redis-1.0.0-withdeps.jar
     environment:
       KC_CACHE: local
       KC_COMMUNITY_REDIS_CACHE_ENABLED: "true"
