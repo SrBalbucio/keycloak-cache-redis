@@ -36,6 +36,7 @@ interferem no container compartilhado dos demais testes de integração.
 | Redis disconnect | `RedisDisconnectIntegrationTest` (3 testes) | pause/unpause (freeze) e crash via SIGKILL + start; fail-fast, reconnect Lettuce, integridade |
 | Reconnect PUBSUB | `PubSubReconnectTest` (6 testes) + `*FactoryResyncTest` (authz, public-keys) + listener do `cluster` | 1ª conexão ignorada, demais limpam L1 próprio + métricas; ação com falha não propaga |
 | Lock sem holder | `RedisPubsubClusterProviderTest` (early-exit/full-wait) + `RedisPubsubClusterProviderIntegrationTest#waiterReturnsEarlyWhenLockVanishesWithoutCompletion` | Lock some sem `task-finished` → waiter retorna `false` antes do teto; lock presente → espera o teto |
+| Leitura pós-remoção de tab | `RedisAuthenticationSessionProviderIntegrationTest#removedTabAdapterStillExposesFields` + `#writesBeforeTabRemovalArePersisted` | Adapter snapshot + write-through sobrevive a `removeTabIdInAuthenticationSession`; ver [Sessões](sessions.md) |
 
 ## Achados caracterizados (comportamento atual documentado pelos testes)
 
@@ -80,3 +81,4 @@ interferem no container compartilhado dos demais testes de integração.
 | Redis failover (Sentinel) | Topologia Sentinel em Testcontainers ainda não existe no projeto; `docker-compose.sentinel.yml` não tem réplica | master + réplica + 3 sentinels via `GenericContainer`, tag/job dedicado |
 | Cluster split | Redis Cluster 6 nós + injeção de partição; mais flaky | Toxiproxy ou network disconnect, tag/job dedicado |
 | Keycloak upgrade | Smoke E2E versão N → N+1 | Harness E2E + cache de imagem no CI |
+| Logout backchannel / `detachFromUserSession` pós-delete | Confirmar se `check()` dos adapters user/client session é acionado; se for, alinhar ao stock | Teste de integração nos fluxos de logout; ver auditoria em [Sessões](sessions.md) |

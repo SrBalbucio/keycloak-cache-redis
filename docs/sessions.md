@@ -51,6 +51,45 @@ Provider: `RedisAuthenticationSessionProvider`
 | Auth session | `{realmId}:auth-session:<id>` |
 | Índice | `{realmId}:auth-session:realm-index` |
 
+### Adapter snapshot + write-through
+
+O `RedisAuthenticationSessionAdapter` é **snapshot + write-through** (não uma view viva do
+root entity). Motivo: no login browser, o core remove a tab e **na mesma request** lê
+`getProtocol()` (`AuthenticationManager.redirectAfterSuccessfulFlow:943`, após
+`AuthenticationSessionManager.removeTabIdInAuthenticationSession:240` apagar todos os campos
+`t.<tabId>.*`, incluindo `protocol`). Uma view viva devolveria `null` → NPE em
+`DefaultKeycloakSession.getProvider:194` (`List.of(name, null)`). O stock
+(`AuthenticationSessionAdapter` do Infinispan) segura entity desacoplada e sobrevive à
+remoção — o nosso adapter faz o mesmo:
+
+- `fields` capturado no constructor via `parent.getTabMap(tabId, "")`
+- getters leem do snapshot; setters atualizam snapshot **e** parent (persistência)
+- testes de regressão em `RedisAuthenticationSessionProviderIntegrationTest`:
+  `removedTabAdapterStillExposesFields`, `writesBeforeTabRemovalArePersisted`
+
+Residual: mutações externas à tab feitas direto no root (`restartSession`, eviction) não se
+refletem num adapter já construído — mesmo comportamento do stock, fora do fluxo normal.
+
+### Contratos dos adapters (auditoria)
+
+Verificação de quais adapters são "live views" sobre entity compartilhada e se o core lê
+campos após remoção na mesma request:
+
+| Adapter | Estrutura | Leitura após remoção | Risco |
+|---|---|---|---|
+| `RedisAuthenticationSessionAdapter` | **era live view** → agora snapshot | `redirectAfterSuccessfulFlow` lê `getProtocol()` pós-remoção (garantido pelo core) | **Corrigido** (acima) |
+| `RedisRootAuthenticationSessionAdapter` | `extends MapEntity` (container das tabs) | n/a (é o próprio root) | Nenhum |
+| `RedisUserSessionAdapter` | `extends MapEntity` (own data) + `check()` | possível em logout/backchannel | Latente (abaixo) |
+| `RedisAuthenticatedClientSessionAdapter` | `extends MapEntity` (own data) + `check()` | possível após `detachFromUserSession` | Latente (abaixo) |
+| `RedisUserLoginFailureAdapter` | `extends MapEntity` (own data), sem `check()` | raro (failures não são lidas pós-remoção) | Baixo |
+
+Os adapters de user/client/loginFailure seguram a própria `MapEntity` — **não** têm o bug do
+null silencioso. Risco residual (não agudo): `check()` lança `ModelIllegalStateException` se
+a entity foi marcada para deleção; se o core ler o adapter após o provider marcar deleção
+(logout backchannel, `detachFromUserSession`), lança exceção em vez de servir stale. É
+fail-fast, mas o follow-up é um teste de regressão desses fluxos, alinhando ao stock (entity
+desacoplada sem throw) se necessário — ver [Testes de modos de falha](testing-failure-modes.md).
+
 ## Login failures
 
 Provider: `RedisUserLoginFailureProvider`

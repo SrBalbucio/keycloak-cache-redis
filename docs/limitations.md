@@ -37,8 +37,7 @@ Comportamentos conhecidos e restrições da implementação atual.
   sobrescrevia o slot `default` da stock e deixava `getProvider(CacheRealmProvider.class)`
   nulo. As variáveis `KC_CACHE_REDIS_ENTITY_ENABLED`/`KC_CACHE_REDIS_ENTITY_TTL_SECONDS` não
   têm mais efeito. Realm/user cache voltam ao Infinispan local (stock).
-- Detalhes e o mecanismo completo: [entity-cache.md](entity-cache.md) e o Defeito B em
-  [spec-authsession-and-realm-cache-fix.md](spec-authsession-and-realm-cache-fix.md).
+- Detalhes e o mecanismo completo (incluindo notas de diagnóstico): [entity-cache.md](entity-cache.md).
 
 ## Fora do escopo atual
 

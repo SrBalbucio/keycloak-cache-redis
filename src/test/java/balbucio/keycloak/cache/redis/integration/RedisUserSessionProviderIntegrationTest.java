@@ -301,7 +301,7 @@ class RedisUserSessionProviderIntegrationTest extends AbstractRedisIntegrationTe
      * during detach, so reads on that same reference afterward throw {@code ModelIllegalStateException}
      * (the SPI is fail-fast here, whereas the stock Infinispan adapter keeps returning its detached
      * entity). Whether any core logout flow reads a detached client session is tracked as a follow-up
-     * in {@code docs/spec-authsession-and-realm-cache-fix.md} (auditoria de adapters).
+     * in {@code docs/sessions.md} (Contratos dos adapters).
      */
     @Test
     void detachFromUserSessionRemovesClientSessionAndUnlinks() {

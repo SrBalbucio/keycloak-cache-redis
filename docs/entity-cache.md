@@ -34,13 +34,30 @@ Realm cache e user cache voltam ao Infinispan stock (local, em `KC_CACHE=local`)
 compatível com os casts do core. As caches de **sessão** (userSession, authSession,
 loginFailure, singleUse), pubsub, authz e publicKey continuam no Redis normalmente.
 
+## Notas de diagnóstico (como o defeito se manifestava)
+
+- Flag **ligada**: `ClassCastException: jdk.proxy2.$Proxy85 cannot be cast to
+  org.keycloak.models.cache.infinispan.RealmCacheSession` em
+  `InfinispanOrganizationProvider.<init>:58` e `InfinispanIdentityProviderStorageProvider.<init>:61`.
+  O core depende ainda do `RealmCacheManager`/`UserCacheManager` (revisionamento), não só do cast.
+- Flag **desligada** (quando as factories ainda existiam com `id="default"`): o slot `default`
+  ficava vazio após `isSupported=false` filtrar a factory do SPI →
+  `getProvider(CacheRealmProvider.class)` devolvia `null` → `NullPointerException` em
+  `InfinispanIdentityProviderStorageProvider.<init>:62`.
+- Armadilha: `cache-realm` é um SPI **público**, então a factory do SPI **não** dispara
+  `KC-SERVICES0047` no log de build — a ausência do aviso não significa que a factory está fora.
+- Validação manual relevante: login com identity provider configurado exercita os casts acima;
+  smoke em [Instalação](installation.md) / [README](../README.md).
+
 ## Se um dia quiser realm/user cache no Redis
 
 Não basta usar `id="default"`: é preciso (a) registrar com `id` distinto (ex.: `redis`) para
 não sobrescrever a stock, e (b) fazer o provider **estender** `RealmCacheSession`/`UserCacheSession`
 reusando o `RealmCacheManager`/`UserCacheManager` real (presente mesmo em `KC_CACHE=local`).
 Isso acopla o SPI aos internals do Infinispan — custo/benefício ruim frente ao cache local, que
-já é eficiente. Veja `docs/spec-authsession-and-realm-cache-fix.md` (Defeito B).
+já é eficiente. Detalhe adicional: B2 (subclasses) resolveria o cast com flag ligada, mas
+**não** a sobrescrita do slot `default` com flag desligada (exigiria o `id` distinto de qualquer
+forma), e não é validável no harness atual (sem `InfinispanConnectionProvider`).
 
 ## Utilidade reaproveitável
 
