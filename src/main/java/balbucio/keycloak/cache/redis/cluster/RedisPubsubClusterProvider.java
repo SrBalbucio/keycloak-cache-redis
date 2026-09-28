@@ -99,35 +99,49 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
             LOG.debugf("notify %s: %s", taskKey, serialized);
             Long subscribers = publisher.publish(channel, serialized);
             RedisMetrics.record(RedisMetrics.Cache.CLUSTER, RedisMetrics.Op.PUBLISH);
+            RedisMetrics.recordClusterEvent(taskKey, RedisMetrics.ClusterEvent.SENT);
             LOG.debugf("notify published to %s subscribers", subscribers);
         } catch (Exception e) {
+            RedisMetrics.recordClusterEvent(taskKey, RedisMetrics.ClusterEvent.PUBLISH_ERROR);
             LOG.errorf(e, "Failed to publish cluster event %s", taskKey);
         }
     }
 
     private void handleMessage(String message) {
+        String eventKeyForMetrics = null;
         try {
             ClusterEventSerializer.ClusterMessage deserialized =
                     ClusterEventSerializer.deserialize(message);
+            eventKeyForMetrics = deserialized.getEventKey();
             if (deserialized.getIgnoreSender()
                     && nodeId != null
                     && nodeId.equals(deserialized.getSenderId())) {
                 LOG.tracef("Ignoring own cluster event %s", deserialized.getEventKey());
+                RedisMetrics.recordClusterEvent(
+                        eventKeyForMetrics, RedisMetrics.ClusterEvent.SELF_IGNORED);
                 return;
             }
 
             String eventKey = deserialized.getEventKey();
             List<ClusterListener> cls = listeners.get(eventKey);
             if (cls == null || cls.isEmpty()) {
+                RedisMetrics.recordClusterEvent(
+                        eventKey, RedisMetrics.ClusterEvent.DROPPED_NO_LISTENER);
                 return;
             }
             if (deserialized.getEvents() == null) {
+                RedisMetrics.recordClusterEvent(
+                        eventKey, RedisMetrics.ClusterEvent.DROPPED_NULL_EVENTS);
                 return;
             }
             for (ClusterEvent event : deserialized.getEvents()) {
                 cls.forEach(event);
             }
+            RedisMetrics.recordClusterEvent(eventKey, RedisMetrics.ClusterEvent.DELIVERED);
+            RedisMetrics.recordClusterLag(eventKey, deserialized.getSentAtMillis());
         } catch (Exception e) {
+            RedisMetrics.recordClusterEvent(
+                    eventKeyForMetrics, RedisMetrics.ClusterEvent.DESER_ERROR);
             LOG.error("Failed to handle Redis cluster event", e);
         }
     }
@@ -221,13 +235,23 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
         if (newCallback == callback) {
             Callable<Boolean> wrappedTask =
                     () -> {
+                        long startedNanos = System.nanoTime();
                         boolean executed =
                                 executeIfNotExecuted(taskKey, taskTimeoutInSeconds, task).isExecuted();
                         if (!executed) {
                             LOG.infof(
                                     "Task already in progress on other cluster node. Will wait until finished");
                         }
-                        callback.getTaskCompletedLatch().await(taskTimeoutInSeconds, TimeUnit.SECONDS);
+                        boolean completed =
+                                callback.getTaskCompletedLatch()
+                                        .await(taskTimeoutInSeconds, TimeUnit.SECONDS);
+                        long waitedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
+                        RedisMetrics.recordClusterTask(
+                                taskKey,
+                                completed && callback.isSuccess()
+                                        ? RedisMetrics.ClusterTask.FINISHED
+                                        : RedisMetrics.ClusterTask.TIMEOUT,
+                                waitedMillis);
                         return callback.isSuccess();
                     };
             Future<Boolean> future = executor.submit(wrappedTask);

@@ -130,6 +130,11 @@ public final class ClusterEventSerializer {
         private boolean ignoreSender;
         private DCNotify dcNotify;
         private String senderId;
+        /**
+         * Fase 0: instante de publicação (epoch millis) para medir lag publish→deliver entre nós.
+         * Opcional e backward-compatible: mensagens antigas desserializam como 0 (lag não medido).
+         */
+        private long sentAtMillis;
 
         public ClusterMessage() {}
 
@@ -139,11 +144,22 @@ public final class ClusterEventSerializer {
                 boolean ignoreSender,
                 DCNotify dcNotify,
                 String senderId) {
+            this(eventKey, events, ignoreSender, dcNotify, senderId, System.currentTimeMillis());
+        }
+
+        public ClusterMessage(
+                String eventKey,
+                List<ClusterEvent> events,
+                boolean ignoreSender,
+                DCNotify dcNotify,
+                String senderId,
+                long sentAtMillis) {
             this.eventKey = eventKey;
             this.events = events;
             this.ignoreSender = ignoreSender;
             this.dcNotify = dcNotify;
             this.senderId = senderId;
+            this.sentAtMillis = sentAtMillis;
         }
 
         public String getEventKey() {
@@ -184,6 +200,14 @@ public final class ClusterEventSerializer {
 
         public void setSenderId(String senderId) {
             this.senderId = senderId;
+        }
+
+        public long getSentAtMillis() {
+            return sentAtMillis;
+        }
+
+        public void setSentAtMillis(long sentAtMillis) {
+            this.sentAtMillis = sentAtMillis;
         }
     }
 }

@@ -272,6 +272,31 @@ class ClusterEventSerializerTest {
         assertTrue(json.contains("role-name-1"), "expected roleName to survive serialization: " + json);
     }
 
+    @Test
+    void serializeStampsSentAtMillis() throws Exception {
+        long before = System.currentTimeMillis();
+        String json =
+                ClusterEventSerializer.serialize(
+                        "k", List.of(ClientAddedEvent.create("c1", "r1")), true, DCNotify.ALL_DCS, "n1");
+        ClusterMessage msg = ClusterEventSerializer.deserialize(json);
+
+        assertTrue(msg.getSentAtMillis() >= before, "expected sentAtMillis to be stamped on serialize");
+        assertTrue(
+                msg.getSentAtMillis() <= System.currentTimeMillis() + 1000,
+                "expected sentAtMillis to be roughly now");
+    }
+
+    @Test
+    void messagesWithoutSentAtMillisDeserializeAsZero() throws Exception {
+        String json =
+                """
+                {"eventKey":"k","events":[],"ignoreSender":true,"dcNotify":"ALL_DCS","senderId":"n1"}
+                """;
+        ClusterMessage msg = ClusterEventSerializer.deserialize(json);
+
+        assertEquals(0L, msg.getSentAtMillis(), "expected backward-compat default 0 for old messages");
+    }
+
     private static void roundTrip(ClusterEvent event) throws Exception {
         String json = ClusterEventSerializer.serialize("task-key", List.of(event), true, DCNotify.ALL_DCS, "node-1");
 
