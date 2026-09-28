@@ -5,6 +5,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.auto.service.AutoService;
+import io.lettuce.core.RedisConnectionStateListener;
 import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import org.jboss.logging.Logger;
@@ -20,6 +21,7 @@ import org.keycloak.provider.ProviderConfigurationBuilder;
 import balbucio.keycloak.cache.redis.common.Constants;
 import balbucio.keycloak.cache.redis.common.IsSupported;
 import balbucio.keycloak.cache.redis.common.RedisKeySpace;
+import balbucio.keycloak.cache.redis.connection.PubSubReconnect;
 import balbucio.keycloak.cache.redis.connection.RedisConnectionProvider;
 
 /**
@@ -41,6 +43,12 @@ public class MapPublicKeyStorageProviderFactory
     private final Map<String, PublicKeysWrapper> sharedL1 = new ConcurrentHashMap<>();
     private StatefulRedisPubSubConnection<String, String> subscriber;
     private volatile boolean pubsubInitialized;
+
+    /**
+     * Fase 1.2: reconciliação no reconnect (limpa o L1 local — a próxima leitura recarrega
+     * do L2 Redis). Package-visible para testes.
+     */
+    RedisConnectionStateListener reconnectListener;
 
     @Override
     public PublicKeyStorageProvider create(KeycloakSession session) {
@@ -80,6 +88,8 @@ public class MapPublicKeyStorageProviderFactory
                         }
                     });
             subscriber.sync().subscribe(channel);
+            reconnectListener = PubSubReconnect.reconnectListener("public-keys", sharedL1::clear);
+            PubSubReconnect.attach(subscriber, reconnectListener);
             LOG.infof("Public-key L1 PUBSUB subscriber initialized (channel=%s, ttl=%ds)", channel, ttlSeconds);
         } catch (Exception e) {
             LOG.warnf(e, "Failed to init public-key PUBSUB — L1 will not receive cross-node invalidation");
@@ -101,11 +111,13 @@ public class MapPublicKeyStorageProviderFactory
     public void close() {
         if (subscriber != null) {
             try {
+                PubSubReconnect.detach(subscriber, reconnectListener);
                 subscriber.close();
             } catch (Exception ignored) {
                 // ignore
             }
             subscriber = null;
+            reconnectListener = null;
         }
         if (provider != null) {
             provider.close();

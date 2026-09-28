@@ -27,7 +27,25 @@ pedir `LOCAL_DC_ONLY`/`ALL_BUT_LOCAL_DC`, o provider loga `warn` e entrega mesmo
 
 `executeIfNotExecuted` usa `SET NX EX` + unlock Lua tokenizado. `executeIfNotExecutedAsync` registra um `TaskCallback` e, ao liberar o lock, publica no canal `cluster:task-finished` (payload `task::<taskKey>`) para completar waiters neste nó e nos demais.
 
-Residual: se o holder morrer sem unlock e o TTL do lock expirar sem publish, waiters podem aguardar até o timeout da task.
+Espera fatiada (Fase 1.4): o waiter checa o lock a cada ~2s sem passar do teto
+`taskTimeoutInSeconds`. Se o lock sumir em dois intervalos seguidos sem o `task-finished`
+chegar (holder morreu sem unlock/publish), o waiter retorna `false` antecipadamente em vez
+de esperar o timeout cheio. Falha de leitura do lock é fail-open (segue esperando).
+
+### Reconnect PUBSUB (Fase 1.2)
+
+PUBSUB não tem replay: invalidações publicadas durante um outage são perdidas para o nó
+surdo. No reconnect (detectado via `RedisConnectionStateListener`), cada canal reconcilia
+seu L1 **próprio**:
+
+| Canal | Ação no reconnect |
+|-------|-------------------|
+| `authz:invalidation` | limpa o LRU local compartilhado (próxima leitura recarrega do L2) |
+| `public-keys:invalidation` | limpa o L1 local (próxima leitura recarrega do L2) |
+| `cluster:events` | só métrica + log — sem L1 próprio; `realms`/`users` stock convergem sob demanda no próximo evento |
+
+Implementação: `connection/PubSubReconnect` (fail-open; primeira conexão ignorada, pois o L1
+nasce vazio). Ver `vendor.lettuce.cluster.events{outcome="reconnected"/"resync_cleared"}`.
 
 ### Sticky session
 

@@ -95,6 +95,10 @@ public final class RedisMetrics {
         public static final String DROPPED_NULL_EVENTS = "dropped_null_events";
         public static final String DESER_ERROR = "deser_error";
         public static final String PUBLISH_ERROR = "publish_error";
+        /** PUBSUB subscription reconnected after an outage (some invalidations may have been lost). */
+        public static final String RECONNECTED = "reconnected";
+        /** Node-local L1 cleared as a reconnect reconciliation (see PubSubReconnect). */
+        public static final String RESYNC_CLEARED = "resync_cleared";
 
         private ClusterEvent() {}
     }

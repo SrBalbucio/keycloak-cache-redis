@@ -77,13 +77,20 @@ docker compose -f docker-compose.multinode.yml up
 1. ~~`FAILS_ON_UNKNOWN_PROPERTIES` ligado~~ ✅ **Resolvido na Fase 1.1**: mapper tolerante +
    mixin ausente de `UserVerifiableCredentialsUpdatedEvent` adicionado
    (`ClusterEventSerializerTest#unknownExtraFieldsOn*AreIgnored`, round-trip do evento VC).
-2. Sem replay após reconnect (prova em `RedisLostInvalidationIntegrationTest`). Melhoria:
-   reconciliação/clear conservador no reconnect (Fase 1.2).
+2. ~~Sem replay após reconnect (prova em `RedisLostInvalidationIntegrationTest`). Melhoria:
+   reconciliação/clear conservador no reconnect (Fase 1.2).~~ ✅ **Resolvido na Fase 1.2**
+   para L1 próprios: `connection/PubSubReconnect` limpa authz-LRU e public-keys-L1 no
+   reconnect (`reconnectListenerReconciles*`, métricas `reconnected`/`resync_cleared`).
+   Residual documentado: `realms`/`users` stock sem replay convergem sob demanda
+   (`docs/limitations.md`).
 3. `DCNotify` transportado, sem filtro (single-site assumido). Melhoria: honrar ou
    documentar + `warn` se ≠ `ALL_DCS` (Fase 1.3).
-4. Waiter async preso até timeout se holder morre sem `publish task-finished`
+4. ~~Waiter async preso até timeout se holder morre sem `publish task-finished`
    (`RedisPubsubClusterProvider`, `docs/limitations.md`). Melhoria: completar como
-   `timeout` + métrica (parcialmente instrumentado na Fase 0; semântica na Fase 1.4).
+   `timeout` + métrica (parcialmente instrumentado na Fase 0; semântica na Fase 1.4).~~ ✅
+   **Resolvido na Fase 1.4**: espera fatiada (~2s) com saída antecipada quando o lock some
+   em dois intervalos seguidos; teto total inalterado
+   (`waiterReturnsEarlyWhenLockVanishesWithoutCompletion` unit + integração).
 5. ~~Cobertura de teste só `ClientAddedEvent` no publish→deliver inter-nó~~ ✅ **Resolvido
    na Fase 1.3**: `RedisPubsubClusterProviderIntegrationTest#
    allSupportedEventTypesAreDeliveredInterNode` publica os 23 tipos suportados do nó A e

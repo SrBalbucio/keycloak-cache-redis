@@ -8,8 +8,10 @@ import com.google.auto.service.AutoService;
 import balbucio.keycloak.cache.redis.authz.cache.LocalAuthorizationCache;
 import balbucio.keycloak.cache.redis.common.Constants;
 import balbucio.keycloak.cache.redis.common.IsSupported;
+import balbucio.keycloak.cache.redis.connection.PubSubReconnect;
 import balbucio.keycloak.cache.redis.connection.RedisConnectionProvider;
 import balbucio.keycloak.cache.redis.connection.RedisConnections;
+import io.lettuce.core.RedisConnectionStateListener;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import org.jboss.logging.Logger;
@@ -43,6 +45,12 @@ public class RedisCachedStoreProviderFactory implements CachedStoreProviderFacto
     private Map<String, LocalAuthorizationCache.LocalEntry> sharedLocalLru;
     private StatefulRedisPubSubConnection<String, String> lruSubscriber;
     private volatile boolean pubsubInitialized = false;
+
+    /**
+     * Fase 1.2: reconciliação no reconnect (limpa o LRU local — a próxima leitura recarrega
+     * do L2 Redis). Package-visible para testes.
+     */
+    RedisConnectionStateListener reconnectListener;
 
     @Override
     public RedisCachedStoreFactoryProvider create(KeycloakSession session) {
@@ -85,6 +93,12 @@ public class RedisCachedStoreProviderFactory implements CachedStoreProviderFacto
                 }
             });
             lruSubscriber.sync().subscribe(channel);
+            reconnectListener = PubSubReconnect.reconnectListener("authz-lru", () -> {
+                if (sharedLocalLru != null) {
+                    sharedLocalLru.clear();
+                }
+            });
+            PubSubReconnect.attach(lruSubscriber, reconnectListener);
             LOG.infof("Authz local LRU PUBSUB subscriber initialized (channel=%s, max=%d, ttl=%ds)",
                     channel, config.getLruMaxSize(), config.getLruTtlSeconds());
         } catch (Exception e) {
@@ -109,11 +123,13 @@ public class RedisCachedStoreProviderFactory implements CachedStoreProviderFacto
     public void close() {
         if (lruSubscriber != null) {
             try {
+                PubSubReconnect.detach(lruSubscriber, reconnectListener);
                 lruSubscriber.close();
             } catch (Exception e) {
                 LOG.debug("Error closing authz LRU subscriber", e);
             }
             lruSubscriber = null;
+            reconnectListener = null;
         }
         if (sharedLocalLru != null) {
             sharedLocalLru.clear();

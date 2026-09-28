@@ -34,6 +34,8 @@ interferem no container compartilhado dos demais testes de integração.
 | Serialization incompatível (hash) | `RedisSerializationCompatibilityTest` (4 testes) | Campos ausentes/extras/corrompidos + hash sem `version` |
 | Serialization incompatível (eventos) | `ClusterEventSerializerTest#unknownExtraFields*AreIgnored` + `RedisSerializationCompatibilityTest#unknownFieldsAreIgnoredAndSubscriberStaysUp` + `#garbagePayloadDoesNotTakeSubscriberDown` | Campos novos no JSON são ignorados (Fase 1.1); payload não-JSON é descartado sem derrubar o subscriber |
 | Redis disconnect | `RedisDisconnectIntegrationTest` (3 testes) | pause/unpause (freeze) e crash via SIGKILL + start; fail-fast, reconnect Lettuce, integridade |
+| Reconnect PUBSUB | `PubSubReconnectTest` (6 testes) + `*FactoryResyncTest` (authz, public-keys) + listener do `cluster` | 1ª conexão ignorada, demais limpam L1 próprio + métricas; ação com falha não propaga |
+| Lock sem holder | `RedisPubsubClusterProviderTest` (early-exit/full-wait) + `RedisPubsubClusterProviderIntegrationTest#waiterReturnsEarlyWhenLockVanishesWithoutCompletion` | Lock some sem `task-finished` → waiter retorna `false` antes do teto; lock presente → espera o teto |
 
 ## Achados caracterizados (comportamento atual documentado pelos testes)
 

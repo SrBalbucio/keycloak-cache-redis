@@ -5,8 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import balbucio.keycloak.cache.redis.cluster.RedisPubsubClusterProvider;
+import balbucio.keycloak.cache.redis.common.RedisKeySpace;
 import balbucio.keycloak.cache.redis.connection.RedisConnectionProvider;
 import balbucio.keycloak.cache.redis.connection.RedisSync;
+import io.lettuce.core.SetArgs;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import java.lang.reflect.Constructor;
 import java.util.ArrayList;
@@ -255,6 +257,39 @@ class RedisPubsubClusterProviderIntegrationTest extends AbstractRedisIntegration
                     latch.await(15, TimeUnit.SECONDS),
                     "not all event types arrived, got " + received.size() + " of " + sent.size());
             assertEquals(sent, received);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void waiterReturnsEarlyWhenLockVanishesWithoutCompletion() throws Exception {
+        RedisConnectionProvider conn = provider();
+        RedisSync publisher = conn.sync();
+        ExecutorService executor = Executors.newCachedThreadPool();
+        try {
+            RedisPubsubClusterProvider nodeB =
+                    new RedisPubsubClusterProvider(publisher, conn.connectPubSub(), 100, executor, "node-b");
+            Thread.sleep(300);
+
+            // Fase 1.4: um holder que adquire o lock e morre sem unlock/publish (simulado por DEL,
+            // como se o TTL tivesse expirado). O waiter deve desistir bem antes do teto de 30s.
+            String task = "ghost-task";
+            String lockKey = RedisKeySpace.key("cluster:lock:" + task);
+            publisher.set(lockKey, "ghost-holder", SetArgs.Builder.nx().ex(60));
+
+            Future<Boolean> waiter = nodeB.executeIfNotExecutedAsync(task, 30, () -> "should-not-run");
+            Thread.sleep(500);
+            publisher.del(lockKey);
+
+            long start = System.nanoTime();
+            assertFalse(
+                    waiter.get(20, TimeUnit.SECONDS),
+                    "vanished lock without completion must resolve as not-executed");
+            long elapsedSecs = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - start);
+            assertTrue(
+                    elapsedSecs < 20,
+                    "waiter must give up well before the 30s ceiling, took " + elapsedSecs + "s");
         } finally {
             executor.shutdownNow();
         }

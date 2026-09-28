@@ -51,6 +51,8 @@ Métrica: `vendor.lettuce.cluster.events` (contador, tags `eventKey` + `outcome`
 | `dropped_null_events` | envelope sem lista de eventos |
 | `deser_error` | falha de desserialização ou exceção no dispatch (nunca derruba o subscriber) |
 | `publish_error` | falha ao publicar no Redis |
+| `reconnected` | subscrição PUBSUB reconectada após outage (Fase 1.2; invalidações do outage perdidas) |
+| `resync_cleared` | L1 próprio limpo como reconciliação no reconnect (Fase 1.2; ausente no canal `cluster`, sem L1) |
 
 Métrica: `vendor.lettuce.cluster.lag` (timer, tag `eventKey`)
 

@@ -11,7 +11,9 @@ import java.util.concurrent.TimeUnit;
 
 import balbucio.keycloak.cache.redis.RedisMetrics;
 import balbucio.keycloak.cache.redis.common.RedisKeySpace;
+import balbucio.keycloak.cache.redis.connection.PubSubReconnect;
 import balbucio.keycloak.cache.redis.connection.RedisSync;
+import io.lettuce.core.RedisConnectionStateListener;
 import io.lettuce.core.SetArgs;
 import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
@@ -45,6 +47,13 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
             new ConcurrentMultivaluedHashMap<>();
     private final ConcurrentMap<String, TaskCallback> taskCallbacks = new ConcurrentHashMap<>();
 
+    /**
+     * Fase 1.2: observa reconnects do canal {@code cluster:events} (métrica + log). Sem ação
+     * de limpeza: este provider não mantém L1 próprio e os caches stock convergem sob demanda
+     * via listeners do core. Package-visible para testes.
+     */
+    final RedisConnectionStateListener reconnectListener;
+
     public RedisPubsubClusterProvider(
             RedisSync publisher,
             StatefulRedisPubSubConnection<String, String> subscriber,
@@ -74,6 +83,8 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
         LOG.debugf(
                 "Subscribed to Redis cluster channels %s,%s (node=%s)",
                 channel, taskFinishedChannel, nodeId);
+        reconnectListener = PubSubReconnect.reconnectListener("cluster", null);
+        PubSubReconnect.attach(subscriber, reconnectListener);
     }
 
     @Override
@@ -250,13 +261,51 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
                             LOG.infof(
                                     "Task already in progress on other cluster node. Will wait until finished");
                         }
-                        boolean completed =
-                                callback.getTaskCompletedLatch()
-                                        .await(taskTimeoutInSeconds, TimeUnit.SECONDS);
+                        // Fase 1.4: espera fatiada em vez de um await único. Se o lock sumir
+                        // (holder morreu sem unlock/publish) em dois slices seguidos sem o
+                        // task-finished chegar, desiste antes do timeout cheio. O teto total
+                        // continua taskTimeoutInSeconds — o contrato de espera máxima não muda.
+                        String lockKey = RedisKeySpace.key(LOCK_PREFIX_RELATIVE + taskKey);
+                        long deadlineNanos =
+                                startedNanos + TimeUnit.SECONDS.toNanos(Math.max(0, taskTimeoutInSeconds));
+                        long sliceNanos =
+                                TimeUnit.SECONDS.toNanos(Math.min(2, Math.max(1, taskTimeoutInSeconds)));
+                        int lockAbsentStreak = 0;
+                        boolean latchCounted = false;
+                        while (System.nanoTime() < deadlineNanos) {
+                            long remainingNanos = deadlineNanos - System.nanoTime();
+                            if (callback.getTaskCompletedLatch()
+                                    .await(Math.min(sliceNanos, remainingNanos), TimeUnit.NANOSECONDS)) {
+                                latchCounted = true;
+                                break;
+                            }
+                            if (callback.getTaskCompletedLatch().getCount() == 0) {
+                                latchCounted = true;
+                                break;
+                            }
+                            boolean lockPresent = true;
+                            try {
+                                Long exists = publisher.exists(lockKey);
+                                lockPresent = exists != null && exists > 0;
+                            } catch (Exception e) {
+                                // Fail-open: sem leitura do lock, segue esperando até o teto.
+                                LOG.debugf(e, "Failed to probe cluster lock %s", lockKey);
+                                lockAbsentStreak = 0;
+                                continue;
+                            }
+                            if (lockPresent) {
+                                lockAbsentStreak = 0;
+                            } else if (++lockAbsentStreak >= 2) {
+                                LOG.infof(
+                                        "Cluster lock %s vanished without task completion — holder likely died; giving up early",
+                                        lockKey);
+                                break;
+                            }
+                        }
                         long waitedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
                         RedisMetrics.recordClusterTask(
                                 taskKey,
-                                completed && callback.isSuccess()
+                                latchCounted && callback.isSuccess()
                                         ? RedisMetrics.ClusterTask.FINISHED
                                         : RedisMetrics.ClusterTask.TIMEOUT,
                                 waitedMillis);
@@ -279,6 +328,7 @@ public class RedisPubsubClusterProvider implements ClusterProvider {
     public void close() {
         try {
             if (subscriber != null && subscriber.isOpen()) {
+                PubSubReconnect.detach(subscriber, reconnectListener);
                 try {
                     subscriber.sync().unsubscribe(channel, taskFinishedChannel);
                 } catch (Exception e) {

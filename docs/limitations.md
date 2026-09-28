@@ -19,7 +19,15 @@ Comportamentos conhecidos e restrições da implementação atual.
 
 - Coordenação multi-nó (sessões / cluster / public-keys) exige o **mesmo Redis lógico** no connection `default`.
 - Public keys usam Redis L2 + L1 local com PUBSUB `public-keys:invalidation`.
-- Locks async (`executeIfNotExecutedAsync`) completam via PUBSUB `cluster:task-finished`. Se o holder morrer sem unlock, waiters podem timeout quando o TTL do lock expira sem publish.
+- Locks async (`executeIfNotExecutedAsync`) completam via PUBSUB `cluster:task-finished`. Se o
+  holder morrer sem unlock/publish, o waiter desiste assim que observa o lock sumido em dois
+  intervalos seguidos (sem esperar o timeout cheio); o teto total continua
+  `taskTimeoutInSeconds`. Métrica `vendor.lettuce.cluster.task{outcome="timeout"}`.
+- Reconnect PUBSUB (Fase 1.2): ao reconectar, cada nó limpa seus L1 **próprios** (authz LRU,
+  public-keys L1) — a próxima leitura recarrega do L2. Invalidações de `realms`/`users` stock
+  publicadas durante o outage são perdidas (PUBSUB sem replay) e convergem sob demanda no
+  próximo evento; não há limpeza forçada do stock (evita thundering-herd no banco).
+  Métricas `vendor.lettuce.cluster.events{outcome="reconnected"/"resync_cleared"}`.
 - Sticky session é desnecessária e está desabilitada pelo shim da extensão.
 
 ## Entity cache (realm/user)
