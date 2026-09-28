@@ -15,17 +15,13 @@ mvn clean package -DskipTests
 docker compose -f docker-compose.multinode.yml up
 ```
 
-- Nó 1: http://localhost:8080 (admin/admin)
-- Nó 2: http://localhost:8081
-- Métricas: `/metrics` em cada nó (o compose já liga `KC_METRICS_ENABLED=true`).
-
-> **Limite conhecido deste compose:** cada nó usa seu próprio H2 (`h2_data_1`/`h2_data_2`).
-> Sessões e invalidações via Redis funcionam, mas **entidades de banco (realm, client, user)
-> não são compartilhadas** — mudar o display name no nó 1 *nunca* aparece no nó 2,
-> independente de cache. Para convergência funcional de entidades seria preciso um banco
-> compartilhado (ex.: Postgres no compose — trabalho futuro). Neste baseline, o cenário B
-> mede o **transporte** (`sent`→`delivered`, lag); a convergência funcional de entidades
-> fica para o ambiente com DB compartilhado.
+- Nó 1: http://localhost:8080 (admin/admin) · métricas http://localhost:9000/metrics
+- Nó 2: http://localhost:8081 · métricas http://localhost:9001/metrics
+- Os dois nós compartilham **o mesmo Postgres e o mesmo Valkey**: sessões, entidades e
+  chaves de realm são comuns — continuidade de sessão e convergência de entidades são
+  observáveis de verdade. (Antes o compose usava um H2 por nó, o que impedia qualquer
+  SSO cross-node: UUIDs de usuário e chaves de realm diferentes por banco.)
+- Primeiro boot roda a migração do banco (~1 min); aguarde os dois "started".
 
 ## Cenários
 
@@ -37,21 +33,27 @@ docker compose -f docker-compose.multinode.yml up
 
 ### B. Propagação realm/client/role/group/user (o que a Fase 0 mede)
 
-> Mede o **transporte**, não a convergência de entidades (ver limite do H2 acima).
+### B. Propagação realm/client/role/group/user (o que a Fase 0 mede)
 
-1. Snapshot antes: `curl -s localhost:8080/metrics | grep vendor_lettuce_cluster_events` e o
-   mesmo no `:8081`. Anote os valores por `eventKey`/`outcome`.
+Funcional + transporte (DB compartilhado — a convergência é observável de verdade).
+
+1. Snapshot antes: `curl -s localhost:9000/metrics | grep vendor_lettuce_cluster_events`
+   (nó 1) e o mesmo no `:9001` (nó 2). Anote os valores por `eventKey`/`outcome`.
 2. No nó 1 (Admin Console): alterar displayName do realm + Save; criar um client; criar uma
    role; atualizar um atributo de usuário. Cada escrita emite invalidações
    (`REALM_INVALIDATION_EVENTS`, `USER_INVALIDATION_EVENTS`, ...).
-3. Recapturar as métricas nos dois nós e confrontar por `eventKey`:
+3. No nó 2: reler cada objeto (realm, client, role, usuário) e anotar se/quando apareceu
+   (cronômetro de celular vale).
+4. Recapturar as métricas nos dois nós e confrontar por `eventKey`:
    - `outcome="sent"` no nó 1 vs `outcome="delivered"` no nó 2 — devem bater 1:1 por escrita;
      `dropped_no_listener` só é esperado para eventKeys sem emissor stock ativo, ver
      [cluster-event-matrix.md](cluster-event-matrix.md).
    - `vendor.lettuce.cluster.lag` (`vendor_lettuce_cluster_lag_seconds_count/sum/max`):
      média = `sum/count`; `max` = pico. (p99 exigiria Prometheus; média+max bastam aqui.)
-4. Esperado: `delivered` acompanha `sent` em ~segundos, sem restart.
-5. Repita 2–3x para noção de variância.
+   - Se algum publish em regime disser `published to 0 subscribers` no log com os dois nós
+     saudáveis, reporte — em regime, o outro nó deve estar subscrito.
+5. Esperado: visível no outro nó em ~segundos (PUBSUB), sem restart.
+6. Repita 2–3x para noção de variância.
 
 ### C. Outage do Redis 30s (janela de stale)
 
@@ -74,7 +76,8 @@ docker compose -f docker-compose.multinode.yml up
 ### D. Locks async (residual conhecido)
 
 Sem provocação manual: consulte
-`vendor_lettuce_cluster_task_seconds_count{outcome="timeout"}` nos dois nós — esperado `0`
+`vendor_lettuce_cluster_task_seconds_count{outcome="timeout"}` nos dois nós
+(`:9000` e `:9001`) — esperado `0`
 (ou métrica ausente) em operação normal. Se aparecer `timeout`, reporte (indica holder
 morto sem `publish task-finished`; a Fase 1.4 já encurta esses casos).
 

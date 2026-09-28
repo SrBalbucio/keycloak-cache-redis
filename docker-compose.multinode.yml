@@ -1,12 +1,24 @@
 volumes:
-  h2_data_1:
-    driver: local
-  h2_data_2:
+  pgdata:
     driver: local
   valkey_data:
     driver: local
 
 services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: keycloak
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   valkey:
     image: valkey/valkey:8.1.5
     ports:
@@ -21,12 +33,15 @@ services:
   keycloak-1:
     image: quay.io/keycloak/keycloak:26.7.1
     volumes:
-      - h2_data_1:/opt/keycloak/data
       - ./target/keycloak-cache-redis-1.0.0-withdeps.jar:/opt/keycloak/providers/keycloak-cache-redis-1.0.0-withdeps.jar
     environment:
       KC_CACHE: local
       KC_COMMUNITY_REDIS_CACHE_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak
       KC_SPI_REDIS_CONNECTION_DEFAULT_MODE: standalone
       KC_SPI_REDIS_CONNECTION_DEFAULT_NODES: valkey:6379
       KC_SPI_REDIS_CONNECTION_DEFAULT_KEY_PREFIX: kc
@@ -40,19 +55,26 @@ services:
       KC_LOG_LEVEL: INFO,balbucio.keycloak.cache.redis:DEBUG
     ports:
       - "8080:8080"
+      - "9000:9000"
     entrypoint: ["/opt/keycloak/bin/kc.sh", "start-dev", "--verbose"]
     depends_on:
-      - valkey
+      valkey:
+        condition: service_started
+      postgres:
+        condition: service_healthy
 
   keycloak-2:
     image: quay.io/keycloak/keycloak:26.7.1
     volumes:
-      - h2_data_2:/opt/keycloak/data
       - ./target/keycloak-cache-redis-1.0.0-withdeps.jar:/opt/keycloak/providers/keycloak-cache-redis-1.0.0-withdeps.jar
     environment:
       KC_CACHE: local
       KC_COMMUNITY_REDIS_CACHE_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak
       KC_SPI_REDIS_CONNECTION_DEFAULT_MODE: standalone
       KC_SPI_REDIS_CONNECTION_DEFAULT_NODES: valkey:6379
       KC_SPI_REDIS_CONNECTION_DEFAULT_KEY_PREFIX: kc
@@ -66,6 +88,10 @@ services:
       KC_LOG_LEVEL: INFO,balbucio.keycloak.cache.redis:DEBUG
     ports:
       - "8081:8081"
+      - "9001:9000"
     entrypoint: ["/opt/keycloak/bin/kc.sh", "start-dev", "--http-port=8081", "--verbose"]
     depends_on:
-      - valkey
+      valkey:
+        condition: service_started
+      postgres:
+        condition: service_healthy
