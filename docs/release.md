@@ -17,7 +17,7 @@ No repositório Woodpecker (ou org), crie o secret:
 
 | Nome | Valor |
 |------|--------|
-| `github_token` | PAT ou fine-grained token GitHub com permissão **Contents: Read and write** (criar releases e upload de assets) |
+| `github_access_token` | PAT ou fine-grained token GitHub com permissão **Contents: Read and write** (criar releases e upload de assets) |
 
 O forge do Woodpecker deve ser o GitHub deste repositório (`CI_FORGE_URL` / `CI_REPO` apontando para o repo correto).
 

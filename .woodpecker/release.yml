@@ -1,7 +1,7 @@
 # Release deploy: builds on tag v*, verifies against Redis, publishes GitHub Release.
 #
 # Required Woodpecker secret (repository or org):
-#   github_token — GitHub PAT / fine-grained token with contents:write (releases)
+#   github_access_token — GitHub PAT / fine-grained token with contents:write (releases)
 #
 # Usage:
 #   1. Update CHANGELOG.md on master
