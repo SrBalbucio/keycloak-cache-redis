@@ -24,10 +24,13 @@ docker compose -f docker-compose.multinode.yml up
 
 > **Por que o LB?** O cookie de identidade carrega `iss` da URL frontend e o Keycloak o
 > valida contra a URL do nó que atende. Com uma porta por nó (`:8080` vs `:8081`), o SSO
-> cross-node é impossível por design (não é bug do SPI — vale para o stock também). O LB
-> dá uma URL única (`:8090`), como em produção. Fluxos browser **sempre** pelo `:8090`;
-> tokens emitidos ali valem nos dois nós. Medições diretas por nó quebravam com 401
-> (parece "stale com valor nulo" — não é).
+> e tokens cross-node falham por issuer mismatch (by design, vale para o stock também).
+> Pior: ao rejeitar o cookie estrangeiro, o nó expira `KEYCLOAK_IDENTITY` **e**
+> `KEYCLOAK_SESSION` juntos (`AuthenticationManager.expireIdentityCookie`) — e como os
+> cookies são do host compartilhado, isso desloga o outro nó também. O LB dá uma URL
+> única (`:8090`), como em produção. Fluxos browser **sempre** pelo `:8090`; tokens
+> emitidos ali valem nos dois nós. Medições diretas por nó quebravam com 401 (parece
+> "stale com valor nulo" — não é).
 
 ## Cenários
 

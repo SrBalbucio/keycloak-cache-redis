@@ -40,13 +40,14 @@ build/
 
 SPEC_**.md
 # scratch de debug local (cookies, jars, dumps)
-*jar
-ssoh*.txt
-lbh*.txt
-ssobody*.bin
-lbform.bin
+*jar*
+sso*.txt
+sso*.bin
+lb*.txt
+lb*.bin
 cookie_*
-verifier.txt
+verifier*.txt
 cs_before.txt
 tok*.json
 hdrs.txt
+r[0-9]h.txt
