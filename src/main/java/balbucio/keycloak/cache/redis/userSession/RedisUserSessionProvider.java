@@ -65,6 +65,16 @@ public class RedisUserSessionProvider implements UserSessionProvider {
     @Override
     public AuthenticatedClientSessionModel createClientSession(
             RealmModel realm, ClientModel client, UserSessionModel userSession) {
+        // Add-if-absent como o stock (Tasks.addIfAbsentSync): um segundo create para a mesma
+        // (sessão, client) — ex. SSO em outro nó/tab sobre a mesma user session — nunca
+        // sobrescreve a entity viva (notas, refresh-token state) nem conta stats de novo.
+        // Devolve a existente (single view); o stock devolveria adapter detached com writes
+        // perdidos, aqui os sets do fluxo aplicam na entity viva (mesmo client, mesmos valores).
+        AuthenticatedClientSessionModel existing =
+                getClientSession(userSession, client, userSession.isOffline());
+        if (existing != null) {
+            return existing;
+        }
         AuthenticatedClientSessionKey key =
                 AuthenticatedClientSessionKey.of(
                         realm.getId(), userSession.getId(), client.getId(), userSession.isOffline());

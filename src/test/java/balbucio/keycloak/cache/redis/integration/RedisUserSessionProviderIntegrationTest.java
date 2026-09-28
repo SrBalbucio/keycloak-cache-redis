@@ -120,6 +120,56 @@ class RedisUserSessionProviderIntegrationTest extends AbstractRedisIntegrationTe
     }
 
     @Test
+    void secondCreateForSameSessionAndClientKeepsLiveState() {
+        // Nó 1: user session + client session com estado vivo.
+        KeycloakSession sessionA = TestSessions.newSession(provider());
+        RealmModel realmA = sessionA.realms().getRealm(TestSessions.REALM_ID);
+        UserModel userA = sessionA.users().getUserById(realmA, TestSessions.USER_ID);
+        RedisUserSessionProvider providerA = new RedisUserSessionProvider(sessionA, 100, false);
+        ClientModel clientA = TestSessions.newClient("client-dup");
+        TestSessions.registerClient(realmA, clientA);
+
+        UserSessionModel usA =
+                providerA.createUserSession(
+                        "s-dup", realmA, userA, "alice", "ip", "form", false, null, null,
+                        SessionPersistenceState.PERSISTENT);
+        AuthenticatedClientSessionModel csA = providerA.createClientSession(realmA, clientA, usA);
+        csA.setNote("live", "node1");
+        sessionA.getTransactionManager().commit();
+
+        // Nó 2 (ex.: SSO na mesma user session em outro nó/tab): segundo create + escrita própria.
+        // Como o stock (add-if-absent), isso nunca pode sobrescrever a entity viva nem contar
+        // stats de novo — senão o refresh do nó 1 morre ("logout fantasma" cross-node).
+        KeycloakSession sessionB = TestSessions.newSession(provider());
+        RealmModel realmB = sessionB.realms().getRealm(TestSessions.REALM_ID);
+        RedisUserSessionProvider providerB = new RedisUserSessionProvider(sessionB, 100, false);
+        ClientModel clientB = TestSessions.newClient("client-dup");
+        TestSessions.registerClient(realmB, clientB);
+
+        UserSessionModel usB = providerB.getUserSession(realmB, "s-dup");
+        assertNotNull(usB);
+        AuthenticatedClientSessionModel csB = providerB.createClientSession(realmB, clientB, usB);
+        csB.setNote("other", "node2");
+        sessionB.getTransactionManager().commit();
+
+        // Leitura fresca: estado vivo intacto + escrita do nó 2 presente + stats contados uma vez.
+        KeycloakSession sessionC = TestSessions.newSession(provider());
+        RealmModel realmC = sessionC.realms().getRealm(TestSessions.REALM_ID);
+        RedisUserSessionProvider providerC = new RedisUserSessionProvider(sessionC, 100, false);
+        ClientModel clientC = TestSessions.newClient("client-dup");
+        TestSessions.registerClient(realmC, clientC);
+
+        UserSessionModel usC = providerC.getUserSession(realmC, "s-dup");
+        AuthenticatedClientSessionModel csC = providerC.getClientSession(usC, clientC, false);
+        assertNotNull(csC);
+        assertEquals("node1", csC.getNote("live"));
+        assertEquals("node2", csC.getNote("other"));
+        assertEquals(
+                1L,
+                (long) providerC.getActiveClientSessionStats(realmC, false).getOrDefault("client-dup", 0L));
+    }
+
+    @Test
     void getUserSessionsStreamByUserAndRemoveAll() {
         KeycloakSession session = TestSessions.newSession(provider());
         RealmModel realm = session.realms().getRealm(TestSessions.REALM_ID);
