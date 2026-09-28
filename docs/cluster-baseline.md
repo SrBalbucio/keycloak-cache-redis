@@ -108,12 +108,17 @@ morto sem `publish task-finished`; a Fase 1.4 já encurta esses casos).
 
 ## Saída da Fase 0.3
 
-- [ ] A: sessão criada no nó 1 válida no nó 2 sem novo login.
-- [ ] B: tabela `sent` (nó 1) vs `delivered` (nó 2) por `eventKey` + lag médio/max por `eventKey` (3 rodadas).
-- [ ] C: comportamento observado no outage; `reconnected` por canal; convergência pós-volta sem restart (sim/não + tempo).
+- [x] A: sessão criada válida cross-node sem novo login (SSO silencioso 3/3 via LB; failover de refresh + Admin REST provado com 1 nó parado).
+- [x] B (2026-09-28, via LB — escritas distribuídas nos 2 nós pelo round-robin):
+  - `REALM_INVALIDATION_EVENTS`: nó 1 sent=3/delivered=6, nó 2 sent=6/delivered=3 — 1:1 exato nas
+    duas direções, zero perda (`dropped_*`, `deser_error`, `publish_error` ausentes).
+  - `USER_INVALIDATION_EVENTS`: sent=1 → delivered=1.
+  - `self_ignored` == `sent` em cada nó (eco próprio descartado como esperado).
+  - Convergência funcional (displayName/client novo) visível no outro nó em ≤2s.
+- [ ] Lag p99/avg por `eventKey` (`vendor_lettuce_cluster_lag_seconds_*`).
+- [ ] C: comportamento no outage; `reconnected` por canal; convergência pós-volta sem restart.
 - [ ] D: `timeout` em `cluster.task` (esperado 0).
 - [ ] Qualquer `Failed to publish` / `Failed to handle` nos logs.
-- [ ] Se B/C dentro do SLO, Fase 1 vira hardening pequeno; se há perda sistemática, priorizar 1.2.
 
 ## Gaps catalogados na Fase 0 (entrada da Fase 1)
 
