@@ -6,7 +6,7 @@
 
     <groupId>balbucio.keycloak.cache</groupId>
     <artifactId>keycloak-cache-redis</artifactId>
-    <version>2.1.1</version>
+    <version>2.1.2</version>
     <packaging>jar</packaging>
     <name>keycloak-cache-redis</name>
     <description>Keycloak session cache replacement using Redis/Valkey (Lettuce)</description>
@@ -23,7 +23,7 @@
         <java.version>17</java.version>
         <maven.compiler.release>${java.version}</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <keycloak.version>26.7.4</keycloak.version>
+        <keycloak.version>26.8.0</keycloak.version>
         <lettuce.version>6.5.1.RELEASE</lettuce.version>
         <auto-service.version>1.1.1</auto-service.version>
         <junit.version>5.11.4</junit.version>
