@@ -6,7 +6,7 @@
 
     <groupId>balbucio.keycloak.cache</groupId>
     <artifactId>keycloak-cache-redis</artifactId>
-    <version>2.1.2</version>
+        <version>2.1.3</version>
     <packaging>jar</packaging>
     <name>keycloak-cache-redis</name>
     <description>Keycloak session cache replacement using Redis/Valkey (Lettuce)</description>
@@ -23,11 +23,11 @@
         <java.version>17</java.version>
         <maven.compiler.release>${java.version}</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <keycloak.version>26.8.0</keycloak.version>
+        <keycloak.version>26.8.1</keycloak.version>
         <lettuce.version>6.5.1.RELEASE</lettuce.version>
         <auto-service.version>1.1.1</auto-service.version>
-        <junit.version>5.11.4</junit.version>
-        <testcontainers.version>1.21.4</testcontainers.version>
+        <junit.version>6.1.3</junit.version>
+        <testcontainers.version>2.0.5</testcontainers.version>
         <awaitility.version>4.3.0</awaitility.version>
     </properties>
 
@@ -103,7 +103,7 @@
         <dependency>
             <groupId>org.jboss.logging</groupId>
             <artifactId>jboss-logging</artifactId>
-            <version>3.6.1.Final</version>
+            <version>3.6.3.Final</version>
             <scope>provided</scope>
         </dependency>
 
@@ -111,13 +111,13 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.22.1</version>
+            <version>2.22.3</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
-            <version>1.17.0</version>
+            <version>1.18.0-M2</version>
             <scope>provided</scope>
         </dependency>
 
@@ -132,13 +132,7 @@
         <dependency>
             <groupId>org.junit.platform</groupId>
             <artifactId>junit-platform-launcher</artifactId>
-            <version>1.11.4</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <version>${testcontainers.version}</version>
+            <version>6.1.3</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -150,13 +144,13 @@
         <dependency>
             <groupId>com.redis</groupId>
             <artifactId>testcontainers-redis</artifactId>
-            <version>2.2.2</version>
+            <version>3.0.0</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
-            <version>5.20.0</version>
+            <version>5.24.0</version>
             <scope>test</scope>
         </dependency>
         <dependency>
