@@ -6,7 +6,7 @@
 
     <groupId>balbucio.keycloak.cache</groupId>
     <artifactId>keycloak-cache-redis</artifactId>
-    <version>1.0.0</version>
+    <version>2.1.1</version>
     <packaging>jar</packaging>
     <name>keycloak-cache-redis</name>
     <description>Keycloak session cache replacement using Redis/Valkey (Lettuce)</description>
