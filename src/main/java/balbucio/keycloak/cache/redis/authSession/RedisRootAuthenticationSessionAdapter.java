@@ -25,6 +25,8 @@ public class RedisRootAuthenticationSessionAdapter extends MapEntity implements 
     static final String TIMESTAMP = "timestamp";
     static final String TAB_PREFIX = "t.";
     static final String TAB_EXISTS_SUFFIX = ".exists";
+    /** Tab field holding the id of the user authenticated in that tab (null until set). */
+    static final String TAB_AUTH_USER = "authUserId";
 
     private final KeycloakSession session;
     private final RedisAuthenticationSessionProvider provider;

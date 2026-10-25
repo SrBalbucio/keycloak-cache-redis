@@ -129,7 +129,7 @@ public class RedisAuthenticationSessionAdapter implements AuthenticationSessionM
 
     @Override
     public UserModel getAuthenticatedUser() {
-        String userId = field("authUserId");
+        String userId = field(RedisRootAuthenticationSessionAdapter.TAB_AUTH_USER);
         if (userId == null) {
             return null;
         }
@@ -138,7 +138,7 @@ public class RedisAuthenticationSessionAdapter implements AuthenticationSessionM
 
     @Override
     public void setAuthenticatedUser(UserModel user) {
-        field("authUserId", user == null ? null : user.getId());
+        field(RedisRootAuthenticationSessionAdapter.TAB_AUTH_USER, user == null ? null : user.getId());
         touch();
     }
 

@@ -117,6 +117,32 @@ Provider: `RedisSingleUseObjectProvider`
 |------|--------|
 | Objeto | `single-use:<id>` |
 
+## Revoked tokens (área `revokedToken`, KC 26.8)
+
+Provider: `RedisRevokedTokenProvider` (resolve `KeycloakSession.revokedTokens()`)
+
+- Espelha o provider stock: delega para o provider de single-use com chave
+  `single-use:<jti>-revoked` (constante `REVOKED_KEY`)
+- `put` → `putIfAbsent` (SET NX atômico): retorna `true` só na primeira revogação
+- `contains` → lookup O(1); expiração pelo TTL do entry (cleanup automático multi-nó —
+  o store Infinispan embutido é node-local em `KC_CACHE=local`)
+- Com `persistRevokedTokens=true` (padrão), escreve também no JPA e faz preload no boot
+  (mesmo caminho já usado pelos revoked keys do single-use)
+
+## Sign out other devices (root auth sessions por usuário, KC 26.8)
+
+`RedisAuthenticationSessionProvider.removeRootAuthenticationSessionsByAuthenticatedUser`
+
+- Índice ZSET `{<realmId>}:auth-session:by-user:<userId>` (member = root session id,
+  score = expiração em ms) alimentado pelo diff do changelog: cada tab com usuário
+  autenticado contribui um member
+- O método poda members expirados (`ZREMRANGEBYSCORE`), pula o root a manter
+  (`rootAuthenticationSessionIdToKeep`), revalida cada member contra as tabs vivas
+  (índice pode estar stale após troca de usuário da tab) e remove os roots válidos pelo
+  caminho normal (com eventos/invalidações)
+- Sem isso, o método default do SPI é no-op e o "sign out all devices" (ex.: pós-troca de
+  senha) deixava logins em progresso vivos
+
 ## Fluxo de escrita (sessões com changelog)
 
 ```
