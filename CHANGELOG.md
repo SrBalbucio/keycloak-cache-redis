@@ -5,7 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.2.0] - 2026-10-25
+
+Alvo: Keycloak 26.8.x. Cobre os dois gaps de corretude frente ao 26.8 (área nova
+`revokedToken` e "sign out other devices" encerrando logins em progresso).
+
+### Added
+
+- Provider `RedisRevokedTokenProvider` para o SPI `revokedToken` (KC 26.8,
+  `KeycloakSession.revokedTokens()`): espelha o provider stock delegando ao single-use com
+  chave `single-use:<jti>-revoked` — `put` atômico via SET NX, `contains` O(1), expiração
+  por TTL multi-nó (o store Infinispan embutido é node-local em `KC_CACHE=local`) e
+  write-through/preload JPA existentes preservados (`persistRevokedTokens`).
+- `removeRootAuthenticationSessionsByAuthenticatedUser` no
+  `RedisAuthenticationSessionProvider` (KC 26.8: "sign out all devices" também encerra
+  logins em progresso; o default do SPI é no-op): índice ZSET
+  `{<realmId>}:auth-session:by-user:<userId>` (member = root session, score = expiração),
+  alimentado pelo diff do changelog, com poda lazy de expirados, preservação do root a
+  manter e revalidação de members stale contra as tabs vivas.
 
 ## [2.1.0] - 2026-09-28
 
