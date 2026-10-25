@@ -4,7 +4,7 @@
 Extensão para Keycloak **26.x.x** que substitui caches distribuídos de sessão (Infinispan) por **Redis/Valkey**, via SPI
 (`DatastoreProvider` + providers `infinispan`), usando **Lettuce**. Inclui cache-aside para Authorization Services.
 
-**Regiões no Redis:** `userSessions`, `authenticationSessions`, `loginFailures`, `singleUseObjects`.
+**Regiões no Redis:** `userSessions`, `authenticationSessions`, `loginFailures`, `singleUseObjects`, `revokedTokens` (KC 26.8).
 
 **Multi-nó:** `ClusterProvider` via Redis PUBSUB (invalidação de caches locais entre nós no mesmo Redis).
 

@@ -102,6 +102,7 @@ As factories usam o mesmo `id` dos providers Infinispan de fábrica (`infinispan
 | `AuthenticationSessionProviderFactory` | `RedisAuthenticationSessionProviderFactory` | `infinispan` | 2 |
 | `UserLoginFailureProviderFactory` | `RedisUserLoginFailureProviderFactory` | `infinispan` | 2 |
 | `SingleUseObjectProviderFactory` | `RedisSingleUseObjectProviderFactory` | `infinispan` | 2 |
+| `RevokedTokenProviderFactory` | `RedisRevokedTokenProviderFactory` | `infinispan` | 2 |
 | `ClusterProviderFactory` | `RedisPubsubClusterProviderFactory` | `infinispan` | 3 |
 | `CachedStoreProviderFactory` | `RedisCachedStoreProviderFactory` | `default` | 2 |
 | `StickySessionEncoderProviderFactory` | `DisabledStickySessionEncoderProvider` | `infinispan` | 2 |
